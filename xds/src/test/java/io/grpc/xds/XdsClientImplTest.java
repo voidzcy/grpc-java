@@ -1102,7 +1102,11 @@ public class XdsClientImplTest {
    * Client receives an EDS response that does not contain a ClusterLoadAssignment for the
    * requested resource while each received ClusterLoadAssignment is valid.
    * The EDS response is ACKed.
+<<<<<<< HEAD
    * Endpoint watchers are NOT notified with an error (EDS protocol is incremental, responses
+=======
+   * The config watcher is NOT notified with an error (EDS protocol is incremental, responses
+>>>>>>> Add tests for EDS protocol and endpoint watchers.
    * not containing requested resources does not indicate absence).
    */
   @Test
@@ -1388,7 +1392,11 @@ public class XdsClientImplTest {
     // notified to the newly added watcher immediately.
     ArgumentCaptor<EndpointUpdate> endpointUpdateCaptor2 = ArgumentCaptor.forClass(null);
     verify(watcher2).onEndpointChanged(endpointUpdateCaptor2.capture());
+<<<<<<< HEAD
     EndpointUpdate endpointUpdate2 = endpointUpdateCaptor2.getValue();
+=======
+    EndpointUpdate endpointUpdate2 = endpointUpdateCaptor1.getValue();
+>>>>>>> Add tests for EDS protocol and endpoint watchers.
     assertThat(endpointUpdate2.getClusterName()).isEqualTo("cluster-foo.googleapis.com");
     assertThat(endpointUpdate2.getLocalityLbEndpointsMap())
         .containsExactly(
@@ -1402,6 +1410,7 @@ public class XdsClientImplTest {
     verifyNoMoreInteractions(requestObserver);
   }
 
+<<<<<<< HEAD
   /**
    * An endpoint watcher is registered for a cluster that already has some other endpoint watchers
    * watching on. Endpoint information received previously is in local cache and notified to
@@ -1475,6 +1484,8 @@ public class XdsClientImplTest {
     verifyNoMoreInteractions(requestObserver);
   }
 
+=======
+>>>>>>> Add tests for EDS protocol and endpoint watchers.
   @Test
   public void addRemoveEndpointWatchersFreely() {
     EndpointWatcher watcher1 = mock(EndpointWatcher.class);
@@ -1677,6 +1688,13 @@ public class XdsClientImplTest {
                     XdsClientImpl.ADS_TYPE_URL_EDS, "0003")));
   }
 
+<<<<<<< HEAD
+=======
+  // TODO(chengyuanzhang): tests for caching EDS responses proactively sent by management server.
+
+  // TODO(chengyuanzhang): tests for LDS/RDS/CDS/EDS sharing the same RPC stream.
+
+>>>>>>> Add tests for EDS protocol and endpoint watchers.
   // TODO(chengyuanzhang): incorporate interactions with cluster watchers and end endpoint watchers
   //  during retry.
   
