@@ -555,11 +555,6 @@ final class XdsClientImpl extends XdsClient {
     } catch (InvalidProtocolBufferException e) {
       adsStream.sendNackRequest(ADS_TYPE_URL_CDS, adsStream.cdsResourceNames,
           cdsResponse.getNonce(), "Broken CDS response");
-      for (Set<ClusterWatcher> watchers : clusterWatchers.values()) {
-        for (ClusterWatcher watcher : watchers) {
-          watcher.onError(Status.fromThrowable(e).augmentDescription("Broken CDS response"));
-        }
-      }
       return;
     }
 
