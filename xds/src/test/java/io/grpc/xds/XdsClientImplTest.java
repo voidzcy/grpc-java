@@ -2311,6 +2311,7 @@ public class XdsClientImplTest {
 
     // Resets backoff and retry immediately.
     inOrder.verify(backoffPolicyProvider).get();
+    fakeClock.runDueTasks();
     inOrder.verify(mockedDiscoveryService)
         .streamAggregatedResources(responseObserverCaptor.capture());
     responseObserver = responseObserverCaptor.getValue();
@@ -2387,6 +2388,7 @@ public class XdsClientImplTest {
 
     // Resets backoff and retry immediately
     inOrder.verify(backoffPolicyProvider).get();
+    fakeClock.runDueTasks();
     inOrder.verify(mockedDiscoveryService)
         .streamAggregatedResources(responseObserverCaptor.capture());
     responseObserver = responseObserverCaptor.getValue();
@@ -2453,6 +2455,7 @@ public class XdsClientImplTest {
 
     // Resets backoff and retry immediately.
     inOrder.verify(backoffPolicyProvider).get();
+    fakeClock.runDueTasks();
     inOrder.verify(mockedDiscoveryService)
         .streamAggregatedResources(responseObserverCaptor.capture());
     responseObserver = responseObserverCaptor.getValue();
@@ -2527,6 +2530,7 @@ public class XdsClientImplTest {
 
     // Resets backoff and retry immediately.
     inOrder.verify(backoffPolicyProvider).get();
+    fakeClock.runDueTasks();
     inOrder.verify(mockedDiscoveryService)
         .streamAggregatedResources(responseObserverCaptor.capture());
     responseObserver = responseObserverCaptor.getValue();
@@ -2788,17 +2792,12 @@ public class XdsClientImplTest {
   }
 
   /**
-<<<<<<< HEAD
    * Matcher for DiscoveryRequest without the comparison of error_details field, which is used for
    * management server debugging purposes.
    *
    * <p>In general, if you are sure error_details field should not be set in a DiscoveryRequest,
    * compare with message equality. Otherwise, this matcher is handy for comparing other fields
    * only.
-=======
-   * Matcher for DiscoveryRequest used to verify NACK requests. Eliminates the comparison of
-   * error_details for DiscoveryRequests if they are expected to be an NACK request.
->>>>>>> Add tests for EDS protocol and endpoint watchers.
    */
   private static class DiscoveryRequestMatcher implements ArgumentMatcher<DiscoveryRequest> {
     private final String versionInfo;
