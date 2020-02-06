@@ -17,26 +17,82 @@
 package io.grpc.xds;
 
 import com.google.common.base.Preconditions;
+import io.grpc.InternalLogId;
+import java.text.MessageFormat;
+import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-final class XdsLogger extends Logger {
-  private final String prefix;
-  private final Logger delegate;
+/**
+ * An xDS-specific logger for collecting xDS specific events. Information logged here goes
+ * to the Java logger of this class.
+ */
+final class XdsLogger {
+  private static final Logger logger = Logger.getLogger(XdsLogger.class.getName());
+  private final InternalLogId logId;
 
-  XdsLogger(String prefix, String delegateName) {
-    super("io.grpc.xds.XdsLogger", null);
-    this.prefix = Preconditions.checkNotNull(prefix, "prefix");
-    delegate = Logger.getLogger(Preconditions.checkNotNull(delegateName, "delegateName"));
-    setParent(delegate.getParent());
+  XdsLogger(InternalLogId logId) {
+    this.logId = Preconditions.checkNotNull(logId, "logId");
   }
 
-  @Override
-  public void log(LogRecord record) {
-    if (delegate.isLoggable(record.getLevel())) {
-      record.getSourceMethodName();
-      record.setMessage("[" + prefix + "]: " + record.getMessage());
-      delegate.log(record);
+  boolean isLoggable(XdsLogLevel level) {
+    Level javaLevel = toJavaLogLevel(level);
+    return logger.isLoggable(javaLevel);
+  }
+
+  void log(XdsLogLevel level, String msg) {
+    Level javaLevel = toJavaLogLevel(level);
+    logOnly(logId, javaLevel, msg);
+  }
+
+  void log(XdsLogLevel level, String messageFormat, Object... args) {
+    Level javaLogLevel = toJavaLogLevel(level);
+    if (logger.isLoggable(javaLogLevel)) {
+      String msg = MessageFormat.format(messageFormat, args);
+      logOnly(logId, javaLogLevel, msg);
     }
+  }
+
+  private static void logOnly(InternalLogId logId, Level logLevel, String msg) {
+    if (logger.isLoggable(logLevel)) {
+      LogRecord lr = new LogRecord(logLevel, "[" + logId + "] " + msg);
+      // No resource bundle as gRPC is not localized.
+      lr.setLoggerName(logger.getName());
+      lr.setSourceClassName(logger.getName());
+      lr.setSourceMethodName("log");
+      logger.log(lr);
+    }
+  }
+
+  private static Level toJavaLogLevel(XdsLogLevel level) {
+    switch (level) {
+      case ERROR:
+        return Level.FINE;
+      case WARNING:
+        return Level.FINER;
+      default:
+        return Level.FINEST;
+    }
+  }
+
+  /**
+   * Log levels. See the table below for the mapping from the XdsLogger levels to
+   * Java logger levels.
+   * <pre>
+   * +---------------------+-------------------+
+   * | ChannelLogger Level | Java Logger Level |
+   * +---------------------+-------------------+
+   * | DEBUG               | FINEST            |
+   * | INFO                | FINEST            |
+   * | WARNING             | FINER             |
+   * | ERROR               | FINE              |
+   * +---------------------+-------------------+
+   * </pre>
+   */
+  enum XdsLogLevel {
+    DEBUG,
+    INFO,
+    WARNING,
+    ERROR
   }
 }
