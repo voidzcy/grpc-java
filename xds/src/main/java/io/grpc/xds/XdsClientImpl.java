@@ -69,7 +69,6 @@ import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 final class XdsClientImpl extends XdsClient {
-  private static final Logger logger = Logger.getLogger(XdsClientImpl.class.getName());
 
   // Longest time to wait, since the subscription to some resource, for concluding its absence.
   @VisibleForTesting
@@ -86,6 +85,11 @@ final class XdsClientImpl extends XdsClient {
   static final String ADS_TYPE_URL_EDS =
       "type.googleapis.com/envoy.api.v2.ClusterLoadAssignment";
 
+  // TODO(chengyuanzhang): we may want to reconsider a way of generating an unique id.
+  private final Logger logger =
+      new XdsLogger(
+          "xds-client<" + Integer.toHexString(System.identityHashCode(this)) + ">",
+          XdsClientImpl.class.getName());
   private final MessagePrinter respPrinter = new MessagePrinter();
 
   private final ManagedChannel channel;
@@ -179,11 +183,12 @@ final class XdsClientImpl extends XdsClient {
     this.backoffPolicyProvider = checkNotNull(backoffPolicyProvider, "backoffPolicyProvider");
     this.stopwatchSupplier = checkNotNull(stopwatchSupplier, "stopwatch");
     adsStreamRetryStopwatch = stopwatchSupplier.get();
+    logger.log(Level.FINEST, "Created");
   }
 
   @Override
   void shutdown() {
-    logger.log(Level.INFO, "Shutting down XdsClient");
+    logger.log(Level.FINEST, "Shutting down");
     channel.shutdown();
     if (adsStream != null) {
       adsStream.close(Status.CANCELLED.withDescription("shutdown").asException());
@@ -234,6 +239,7 @@ final class XdsClientImpl extends XdsClient {
     } else {
       ldsResourceName = hostName + ":" + port;
     }
+    logger.log(Level.FINEST, "Started watching config for {0}." + ldsResourceName);
     if (rpcRetryTimer != null && rpcRetryTimer.isPending()) {
       // Currently in retry backoff.
       return;
@@ -251,10 +257,11 @@ final class XdsClientImpl extends XdsClient {
 
   @Override
   void watchClusterData(String clusterName, ClusterWatcher watcher) {
+    checkNotNull(clusterName, "clusterName");
     checkNotNull(watcher, "watcher");
     boolean needRequest = false;
     if (!clusterWatchers.containsKey(clusterName)) {
-      logger.log(Level.FINE, "Start watching cluster {0}", clusterName);
+      logger.log(Level.FINEST, "Start watching cluster {0}.", clusterName);
       needRequest = true;
       clusterWatchers.put(clusterName, new HashSet<ClusterWatcher>());
     }
@@ -266,6 +273,7 @@ final class XdsClientImpl extends XdsClient {
     watchers.add(watcher);
     // If local cache contains cluster information to be watched, notify the watcher immediately.
     if (absentCdsResources.contains(clusterName)) {
+      logger.log(Level.FINEST, "Cluster resource {0} is known to be absent.", clusterName);
       watcher.onError(
           Status.NOT_FOUND
               .withDescription(
@@ -273,6 +281,7 @@ final class XdsClientImpl extends XdsClient {
       return;
     }
     if (clusterNamesToClusterUpdates.containsKey(clusterName)) {
+      logger.log(Level.FINEST, "Retrieve cluster info {0} from local cache.", clusterName);
       watcher.onClusterChanged(clusterNamesToClusterUpdates.get(clusterName));
       return;
     }
@@ -305,7 +314,7 @@ final class XdsClientImpl extends XdsClient {
     }
     watchers.remove(watcher);
     if (watchers.isEmpty()) {
-      logger.log(Level.FINE, "Stop watching cluster {0}", clusterName);
+      logger.log(Level.FINEST, "Stop watching cluster {0}.", clusterName);
       clusterWatchers.remove(clusterName);
       // Remove the corresponding CDS entry.
       absentCdsResources.remove(clusterName);
@@ -332,7 +341,7 @@ final class XdsClientImpl extends XdsClient {
     checkNotNull(watcher, "watcher");
     boolean needRequest = false;
     if (!endpointWatchers.containsKey(clusterName)) {
-      logger.log(Level.FINE, "Start watching endpoints in cluster {0}", clusterName);
+      logger.log(Level.FINEST, "Start watching endpoints in cluster {0}", clusterName);
       needRequest = true;
       endpointWatchers.put(clusterName, new HashSet<EndpointWatcher>());
     }
@@ -345,6 +354,8 @@ final class XdsClientImpl extends XdsClient {
     // If local cache contains endpoint information for the cluster to be watched, notify
     // the watcher immediately.
     if (absentEdsResources.contains(clusterName)) {
+      logger.log(Level.FINEST,
+          "Endpoint resource for cluster {0} is known to be absent.", clusterName);
       watcher.onError(
           Status.NOT_FOUND
               .withDescription(
@@ -352,6 +363,8 @@ final class XdsClientImpl extends XdsClient {
       return;
     }
     if (clusterNamesToEndpointUpdates.containsKey(clusterName)) {
+      logger.log(Level.FINEST,
+          "Retrieve endpoints info for cluster {0} from local cache.", clusterName);
       watcher.onEndpointChanged(clusterNamesToEndpointUpdates.get(clusterName));
       return;
     }
@@ -448,6 +461,7 @@ final class XdsClientImpl extends XdsClient {
         AggregatedDiscoveryServiceGrpc.newStub(channel);
     adsStream = new AdsStream(stub);
     adsStream.start();
+    logger.log(Level.FINEST, "ADS stream started");
     adsStreamRetryStopwatch.reset().start();
   }
 
@@ -460,8 +474,8 @@ final class XdsClientImpl extends XdsClient {
    * ACK request is sent to management server.
    */
   private void handleLdsResponse(DiscoveryResponse ldsResponse) {
-    if (logger.isLoggable(Level.FINE)) {
-      logger.log(Level.FINE, "Received an LDS response: {0}", respPrinter.print(ldsResponse));
+    if (logger.isLoggable(Level.FINEST)) {
+      logger.log(Level.FINEST, "Received an LDS response: {0}", respPrinter.print(ldsResponse));
     }
     checkState(ldsResourceName != null && configWatcher != null,
         "No LDS request was ever sent. Management server is doing something wrong");
@@ -473,8 +487,9 @@ final class XdsClientImpl extends XdsClient {
         listeners.add(res.unpack(Listener.class));
       }
     } catch (InvalidProtocolBufferException e) {
+      logger.log(Level.FINER, "Failed to unpack Listeners in LDS response {0}" + e);
       adsStream.sendNackRequest(ADS_TYPE_URL_LDS, ImmutableList.of(ldsResourceName),
-          "Broken LDS response.");
+          "Malformed LDS response: " + e);
       return;
     }
 
@@ -489,8 +504,10 @@ final class XdsClientImpl extends XdsClient {
         }
       }
     } catch (InvalidProtocolBufferException e) {
+      logger.log(Level.FINER,
+          "Failed to unpack HttpConnectionManagers in Listeners of LDS response {0}" + e);
       adsStream.sendNackRequest(ADS_TYPE_URL_LDS, ImmutableList.of(ldsResourceName),
-          "Broken LDS response.");
+          "Malformed LDS response: " + e);
       return;
     }
 
@@ -510,23 +527,29 @@ final class XdsClientImpl extends XdsClient {
         RouteConfiguration rc = requestedHttpConnManager.getRouteConfig();
         clusterName = findClusterNameInRouteConfig(rc, hostName);
         if (clusterName == null) {
-          errorMessage = "Cannot find a valid cluster name in VirtualHost inside "
-              + "RouteConfiguration with domains matching: " + hostName + ".";
+          errorMessage =
+              "Listener [" + ldsResourceName + "] : cannot find a valid cluster name in any "
+                  + "virtual hosts inside RouteConfiguration with domains matching: " + hostName;
         }
       } else if (requestedHttpConnManager.hasRds()) {
         Rds rds = requestedHttpConnManager.getRds();
         if (!rds.getConfigSource().hasAds()) {
-          errorMessage = "For using RDS, it must be set to use ADS.";
+          errorMessage =
+              "Listener [" + ldsResourceName + "] : for using RDS, config_source must be"
+                  + " set to use ADS.";
         } else {
           rdsRouteConfigName = rds.getRouteConfigName();
         }
       } else {
-        errorMessage = "HttpConnectionManager message must either provide the "
-            + "RouteConfiguration directly in-line or tell the client to use RDS to obtain it.";
+        errorMessage =
+            "Listener [" + ldsResourceName + "] : HttpConnectionManager message must either"
+                + " provide RouteConfiguration directly in-line or tell the client to use RDS"
+                + " to obtain it.";
       }
     }
 
     if (errorMessage != null) {
+      logger.log(Level.FINER, "LDS response contains invalid info: {0}", errorMessage);
       adsStream.sendNackRequest(ADS_TYPE_URL_LDS, ImmutableList.of(ldsResourceName), errorMessage);
       return;
     }
@@ -541,9 +564,13 @@ final class XdsClientImpl extends XdsClient {
     }
     if (clusterName != null) {
       // Found clusterName in the in-lined RouteConfiguration.
+      logger.log(Level.FINEST,
+          "Found cluster name (inlined in LDS response) for " + ldsResourceName
+              + " : " + clusterName);
       ConfigUpdate configUpdate = ConfigUpdate.newBuilder().setClusterName(clusterName).build();
       configWatcher.onConfigChanged(configUpdate);
     } else if (rdsRouteConfigName != null) {
+      logger.log(Level.FINEST, "Use RDS to dynamically resolve config for " + ldsResourceName);
       // Send an RDS request if the resource to request has changed.
       if (!rdsRouteConfigName.equals(adsStream.rdsResourceName)) {
         adsStream.sendXdsRequest(ADS_TYPE_URL_RDS, ImmutableList.of(rdsRouteConfigName));
@@ -558,7 +585,7 @@ final class XdsClientImpl extends XdsClient {
                     INITIAL_RESOURCE_FETCH_TIMEOUT_SEC, TimeUnit.SECONDS, timeService);
       }
     } else {
-      // The requested Listener does not present in this LDS response.
+      // The requested Listener is removed by management server.
       if (ldsRespTimer == null) {
         configWatcher.onError(
             Status.NOT_FOUND.withDescription(
@@ -575,8 +602,8 @@ final class XdsClientImpl extends XdsClient {
    * invalid data for gRPC's usage. Otherwise, an ACK request is sent to management server.
    */
   private void handleRdsResponse(DiscoveryResponse rdsResponse) {
-    if (logger.isLoggable(Level.FINE)) {
-      logger.log(Level.FINE, "Received an RDS response: {0}", respPrinter.print(rdsResponse));
+    if (logger.isLoggable(Level.FINEST)) {
+      logger.log(Level.FINEST, "Received an RDS response: {0}", respPrinter.print(rdsResponse));
     }
     checkState(adsStream.rdsResourceName != null,
         "Never requested for RDS resources, management server is doing something wrong");
@@ -591,8 +618,9 @@ final class XdsClientImpl extends XdsClient {
         }
       }
     } catch (InvalidProtocolBufferException e) {
+      logger.log(Level.FINER, "Failed to unpack RouteConfigurations in RDS response {0}", e);
       adsStream.sendNackRequest(ADS_TYPE_URL_RDS, ImmutableList.of(adsStream.rdsResourceName),
-          "Broken RDS response.");
+          "Malformed RDS response: " + e);
       return;
     }
 
@@ -601,9 +629,12 @@ final class XdsClientImpl extends XdsClient {
     if (requestedRouteConfig != null) {
       clusterName = findClusterNameInRouteConfig(requestedRouteConfig, hostName);
       if (clusterName == null) {
-        adsStream.sendNackRequest(ADS_TYPE_URL_RDS, ImmutableList.of(adsStream.rdsResourceName),
-            "Cannot find a valid cluster name in VirtualHost inside "
-                + "RouteConfiguration with domains matching: " + hostName + ".");
+        adsStream.sendNackRequest(
+            ADS_TYPE_URL_RDS,
+            ImmutableList.of(adsStream.rdsResourceName),
+            "RouteConfiguration [" + requestedRouteConfig.getName() + "]: "
+                + "cannot find a valid cluster name in any virtual hosts with domains matching: "
+                + hostName);
         return;
       }
     }
@@ -618,6 +649,9 @@ final class XdsClientImpl extends XdsClient {
         rdsRespTimer.cancel();
         rdsRespTimer = null;
       }
+      logger.log(Level.FINEST,
+          "Found cluster name (in RDS response) for {0} : {1}",
+          new Object[]{ldsResourceName, clusterName});
       ConfigUpdate configUpdate = ConfigUpdate.newBuilder().setClusterName(clusterName).build();
       configWatcher.onConfigChanged(configUpdate);
     }
@@ -698,8 +732,8 @@ final class XdsClientImpl extends XdsClient {
    * interested in the same clusters are added later.
    */
   private void handleCdsResponse(DiscoveryResponse cdsResponse) {
-    if (logger.isLoggable(Level.FINE)) {
-      logger.log(Level.FINE, "Received an CDS response: {0}", respPrinter.print(cdsResponse));
+    if (logger.isLoggable(Level.FINEST)) {
+      logger.log(Level.FINEST, "Received an CDS response: {0}", respPrinter.print(cdsResponse));
     }
     adsStream.cdsRespNonce = cdsResponse.getNonce();
 
@@ -710,8 +744,9 @@ final class XdsClientImpl extends XdsClient {
         clusters.add(res.unpack(Cluster.class));
       }
     } catch (InvalidProtocolBufferException e) {
+      logger.log(Level.FINER, "Failed to unpack Clusters in RDS response {0}", e);
       adsStream.sendNackRequest(ADS_TYPE_URL_CDS, clusterWatchers.keySet(),
-          "Broken CDS response");
+          "Malformed CDS response: " + e);
       return;
     }
 
@@ -781,6 +816,7 @@ final class XdsClientImpl extends XdsClient {
       clusterUpdates.put(clusterName, updateBuilder.build());
     }
     if (errorMessage != null) {
+      logger.log(Level.FINER, "CDS response contains invalid info: {0}", errorMessage);
       adsStream.sendNackRequest(ADS_TYPE_URL_CDS, clusterWatchers.keySet(), errorMessage);
       return;
     }
@@ -851,8 +887,8 @@ final class XdsClientImpl extends XdsClient {
    * are added later.
    */
   private void handleEdsResponse(DiscoveryResponse edsResponse) {
-    if (logger.isLoggable(Level.FINE)) {
-      logger.log(Level.FINE, "Received an EDS response: {0}", respPrinter.print(edsResponse));
+    if (logger.isLoggable(Level.FINEST)) {
+      logger.log(Level.FINEST, "Received an EDS response: {0}", respPrinter.print(edsResponse));
     }
 
     // Unpack ClusterLoadAssignment messages.
@@ -864,7 +900,7 @@ final class XdsClientImpl extends XdsClient {
       }
     } catch (InvalidProtocolBufferException e) {
       adsStream.sendNackRequest(ADS_TYPE_URL_EDS, endpointWatchers.keySet(),
-          "Broken EDS response");
+          "Malformed EDS response: " + e);
       return;
     }
 
@@ -1065,7 +1101,7 @@ final class XdsClientImpl extends XdsClient {
             edsRespNonce = response.getNonce();
             handleEdsResponse(response);
           } else {
-            logger.log(Level.FINE, "Received an unknown type of DiscoveryResponse {0}",
+            logger.log(Level.FINER, "Received an unknown type of DiscoveryResponse {0}",
                 response);
           }
         }
@@ -1077,8 +1113,7 @@ final class XdsClientImpl extends XdsClient {
       syncContext.execute(new Runnable() {
         @Override
         public void run() {
-          handleStreamClosed(
-              Status.fromThrowable(t).augmentDescription("ADS stream [" + this + "] had an error"));
+          handleStreamClosed(Status.fromThrowable(t));
         }
       });
     }
@@ -1089,7 +1124,7 @@ final class XdsClientImpl extends XdsClient {
         @Override
         public void run() {
           handleStreamClosed(
-              Status.UNAVAILABLE.withDescription("ADS stream [" + this + "] was closed by server"));
+              Status.UNAVAILABLE.withDescription("Closed by server"));
         }
       });
     }
@@ -1099,7 +1134,11 @@ final class XdsClientImpl extends XdsClient {
       if (closed) {
         return;
       }
-      logger.log(Level.FINE, error.getDescription(), error.getCause());
+      if (logger.isLoggable(Level.FINE)) {
+        logger.log(
+            Level.FINE, "ADS stream closed with status {0}: {1}. Cause: {2}",
+            new Object[] {error.getCode(), error.getDescription(), error.getDescription()});
+      }
       closed = true;
       if (configWatcher != null) {
         configWatcher.onError(error);
@@ -1129,7 +1168,7 @@ final class XdsClientImpl extends XdsClient {
                 retryBackoffPolicy.nextBackoffNanos()
                     - adsStreamRetryStopwatch.elapsed(TimeUnit.NANOSECONDS));
       }
-      logger.log(Level.FINE, "{0} stream closed, retry in {1} ns", new Object[]{this, delayNanos});
+      logger.log(Level.FINEST, "ADS stream retry in {0} ns", delayNanos);
       rpcRetryTimer =
           syncContext.schedule(
               new RpcRetryTask(), delayNanos, TimeUnit.NANOSECONDS, timeService);
@@ -1185,7 +1224,7 @@ final class XdsClientImpl extends XdsClient {
               .setResponseNonce(nonce)
               .build();
       requestWriter.onNext(request);
-      logger.log(Level.FINE, "Sent DiscoveryRequest {0}", request);
+      logger.log(Level.FINEST, "Sent DiscoveryRequest {0}", request);
     }
 
     /**
@@ -1219,7 +1258,7 @@ final class XdsClientImpl extends XdsClient {
               .setResponseNonce(nonce)
               .build();
       requestWriter.onNext(request);
-      logger.log(Level.FINE, "Sent ACK request {0}", request);
+      logger.log(Level.FINEST, "Sent ACK request {0}", request);
     }
 
     /**
@@ -1258,7 +1297,7 @@ final class XdsClientImpl extends XdsClient {
                       .setMessage(message))
               .build();
       requestWriter.onNext(request);
-      logger.log(Level.FINE, "Sent NACK request {0}", request);
+      logger.log(Level.FINEST, "Sent NACK request {0}", request);
     }
   }
 
@@ -1280,6 +1319,7 @@ final class XdsClientImpl extends XdsClient {
     @Override
     public void run() {
       ldsRespTimer = null;
+      logger.log(Level.FINER, "");
       configWatcher.onError(
           Status.NOT_FOUND
               .withDescription("Listener resource for listener [" + resourceName + "] not found."));
