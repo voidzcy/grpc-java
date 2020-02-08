@@ -67,8 +67,9 @@ final class XdsLogger {
   private static Level toJavaLogLevel(XdsLogLevel level) {
     switch (level) {
       case ERROR:
-        return Level.FINE;
       case WARNING:
+        return Level.FINE;
+      case INFO:
         return Level.FINER;
       default:
         return Level.FINEST;
@@ -83,8 +84,8 @@ final class XdsLogger {
    * | ChannelLogger Level | Java Logger Level |
    * +---------------------+-------------------+
    * | DEBUG               | FINEST            |
-   * | INFO                | FINEST            |
-   * | WARNING             | FINER             |
+   * | INFO                | FINER             |
+   * | WARNING             | FINE              |
    * | ERROR               | FINE              |
    * +---------------------+-------------------+
    * </pre>
