@@ -298,6 +298,16 @@ abstract class XdsClient {
       return Objects.hash(clusterName, localityLbEndpointsMap, dropPolicies);
     }
 
+    @Override
+    public String toString() {
+      return
+          MoreObjects.toStringHelper(this)
+              .add("clusterName", clusterName)
+              .add("localityLbEndpointsMap", localityLbEndpointsMap)
+              .add("dropPolicies", dropPolicies)
+              .toString();
+    }
+
     static final class Builder {
       private String clusterName;
       private Map<Locality, LocalityLbEndpoints> localityLbEndpointsMap = new LinkedHashMap<>();
