@@ -19,6 +19,7 @@ package io.grpc.xds;
 import static com.google.common.base.Preconditions.checkArgument;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -66,6 +67,11 @@ abstract class XdsClient {
 
     String getClusterName() {
       return clusterName;
+    }
+
+    @Override
+    public String toString() {
+      return MoreObjects.toStringHelper(this).add("clusterName", clusterName).toString();
     }
 
     static Builder newBuilder() {

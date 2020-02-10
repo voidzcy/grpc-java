@@ -25,6 +25,7 @@ import com.google.common.collect.ImmutableList;
 import io.envoyproxy.envoy.api.v2.core.Node;
 import io.grpc.Attributes;
 import io.grpc.EquivalentAddressGroup;
+import io.grpc.InternalLogId;
 import io.grpc.NameResolver;
 import io.grpc.Status;
 import io.grpc.Status.Code;
@@ -40,6 +41,7 @@ import io.grpc.xds.XdsClient.ConfigWatcher;
 import io.grpc.xds.XdsClient.RefCountedXdsClientObjectPool;
 import io.grpc.xds.XdsClient.XdsChannelFactory;
 import io.grpc.xds.XdsClient.XdsClientFactory;
+import io.grpc.xds.XdsLogger.XdsLogLevel;
 import java.io.IOException;
 import java.net.URI;
 import java.util.List;
@@ -56,6 +58,8 @@ import javax.annotation.Nullable;
  * @see XdsNameResolverProvider
  */
 final class XdsNameResolver extends NameResolver {
+
+  private final XdsLogger logger = new XdsLogger(InternalLogId.allocate("xds-resolver", null));
 
   private final String authority;
   private final String hostName;
@@ -93,6 +97,7 @@ final class XdsNameResolver extends NameResolver {
     this.backoffPolicyProvider = checkNotNull(backoffPolicyProvider, "backoffPolicyProvider");
     this.stopwatchSupplier = checkNotNull(stopwatchSupplier, "stopwatchSupplier");
     this.bootstrapper = checkNotNull(bootstrapper, "bootstrapper");
+    logger.log(XdsLogLevel.INFO, "Created resolver for {0}", name);
   }
 
   @Override
@@ -137,6 +142,7 @@ final class XdsNameResolver extends NameResolver {
     xdsClient.watchConfigData(hostName, port, new ConfigWatcher() {
       @Override
       public void onConfigChanged(ConfigUpdate update) {
+        logger.log(XdsLogLevel.INFO, "Received config update: {0}", update);
         String serviceConfig = "{\n"
             + "  \"loadBalancingConfig\": [\n"
             + "    {\n"
@@ -154,6 +160,7 @@ final class XdsNameResolver extends NameResolver {
               Status.UNKNOWN.withDescription("Invalid service config").withCause(e));
           return;
         }
+        logger.log(XdsLogLevel.INFO, "Generated service config:\n{0}", serviceConfig);
         Attributes attrs =
             Attributes.newBuilder()
                 .set(GrpcAttributes.NAME_RESOLVER_SERVICE_CONFIG, config)
@@ -186,6 +193,7 @@ final class XdsNameResolver extends NameResolver {
 
   @Override
   public void shutdown() {
+    logger.log(XdsLogLevel.INFO, "Shutdown");
     if (xdsClient != null) {
       xdsClient = xdsClientPool.returnObject(xdsClient);
     }
