@@ -18,6 +18,7 @@ package io.grpc.xds;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.base.MoreObjects;
 import io.grpc.Internal;
 import io.grpc.LoadBalancer;
 import io.grpc.LoadBalancer.Helper;
@@ -89,11 +90,11 @@ public class CdsLoadBalancerProvider extends LoadBalancerProvider {
     /**
      * Name of cluster to query CDS for.
      */
-    final String name;
+    final String clusterName;
 
-    CdsConfig(String name) {
-      checkArgument(name != null && !name.isEmpty(), "name is null or empty");
-      this.name = name;
+    CdsConfig(String clusterName) {
+      checkArgument(clusterName != null && !clusterName.isEmpty(), "name is null or empty");
+      this.clusterName = clusterName;
     }
 
     @Override
@@ -105,12 +106,17 @@ public class CdsLoadBalancerProvider extends LoadBalancerProvider {
         return false;
       }
       CdsConfig cdsConfig = (CdsConfig) o;
-      return Objects.equals(name, cdsConfig.name);
+      return Objects.equals(clusterName, cdsConfig.clusterName);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(name);
+      return Objects.hash(clusterName);
+    }
+
+    @Override
+    public String toString() {
+      return MoreObjects.toStringHelper(this).add("clusterName", clusterName).toString();
     }
   }
 }

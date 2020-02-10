@@ -162,6 +162,19 @@ abstract class XdsClient {
       return upstreamTlsContext;
     }
 
+    @Override
+    public String toString() {
+      return
+          MoreObjects.toStringHelper(this)
+              .add("clusterName", clusterName)
+              .add("edsServiceName", edsServiceName)
+              .add("lbPolicy", lbPolicy)
+              .add("enableLrs", enableLrs)
+              .add("lrsServerName", lrsServerName)
+              .add("upstreamTlsContext", upstreamTlsContext)
+              .toString();
+    }
+
     static Builder newBuilder() {
       return new Builder();
     }

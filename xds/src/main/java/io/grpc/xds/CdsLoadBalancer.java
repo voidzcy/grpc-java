@@ -23,9 +23,8 @@ import static io.grpc.xds.EdsLoadBalancerProvider.EDS_POLICY_NAME;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import io.envoyproxy.envoy.api.v2.auth.UpstreamTlsContext;
-import io.grpc.ChannelLogger;
-import io.grpc.ChannelLogger.ChannelLogLevel;
 import io.grpc.EquivalentAddressGroup;
+import io.grpc.InternalLogId;
 import io.grpc.LoadBalancer;
 import io.grpc.LoadBalancerRegistry;
 import io.grpc.Status;
@@ -37,6 +36,7 @@ import io.grpc.xds.CdsLoadBalancerProvider.CdsConfig;
 import io.grpc.xds.XdsClient.ClusterUpdate;
 import io.grpc.xds.XdsClient.ClusterWatcher;
 import io.grpc.xds.XdsLoadBalancerProvider.XdsConfig;
+import io.grpc.xds.XdsLogger.XdsLogLevel;
 import io.grpc.xds.XdsSubchannelPickers.ErrorPicker;
 import io.grpc.xds.sds.SslContextProvider;
 import io.grpc.xds.sds.TlsContextManager;
@@ -51,7 +51,8 @@ import javax.annotation.Nullable;
  * Load balancer for cds_experimental LB policy.
  */
 public final class CdsLoadBalancer extends LoadBalancer {
-  private final ChannelLogger channelLogger;
+  private final InternalLogId logId;
+  private final XdsLogger logger;
   private final LoadBalancerRegistry lbRegistry;
   private final GracefulSwitchLoadBalancer switchingLoadBalancer;
   private final Helper helper;
@@ -77,16 +78,31 @@ public final class CdsLoadBalancer extends LoadBalancer {
   @VisibleForTesting
   CdsLoadBalancer(Helper helper, LoadBalancerRegistry lbRegistry,
       TlsContextManager tlsContextManager) {
+    logId = InternalLogId.allocate("cds-lb", null);
+    logger = new XdsLogger(logId);
     this.helper = helper;
-    this.channelLogger = helper.getChannelLogger();
     this.lbRegistry = lbRegistry;
     this.switchingLoadBalancer = new GracefulSwitchLoadBalancer(helper);
     this.tlsContextManager = tlsContextManager;
+    logger.log(XdsLogLevel.INFO, "Created");
   }
 
   @Override
   public void handleResolvedAddresses(ResolvedAddresses resolvedAddresses) {
-    channelLogger.log(ChannelLogLevel.DEBUG, "Received ResolvedAddresses {0}", resolvedAddresses);
+    logger.log(XdsLogLevel.DEBUG, "Received ResolvedAddresses {0}", resolvedAddresses);
+    Object lbConfig = resolvedAddresses.getLoadBalancingPolicyConfig();
+    if (!(lbConfig instanceof CdsConfig)) {
+      helper.updateBalancingState(
+          TRANSIENT_FAILURE,
+          new ErrorPicker(Status.UNAVAILABLE.withDescription(
+              "Load balancing config '" + lbConfig + "' is not a CdsConfig")));
+      return;
+    }
+    CdsConfig newCdsConfig = (CdsConfig) lbConfig;
+    logger.log(
+        XdsLogLevel.INFO,
+        "Received name resolution update, load balancing config: {0}",  newCdsConfig);
+
     if (xdsClientPool == null) {
       xdsClientPool = resolvedAddresses.getAttributes().get(XdsAttributes.XDS_CLIENT_POOL);
       if (xdsClientPool == null) {
@@ -98,17 +114,8 @@ public final class CdsLoadBalancer extends LoadBalancer {
         return;
       }
       xdsClient = xdsClientPool.getObject();
+      logger.log(XdsLogLevel.INFO, "Using xDS client {0} from channel", xdsClient);
     }
-
-    Object lbConfig = resolvedAddresses.getLoadBalancingPolicyConfig();
-    if (!(lbConfig instanceof CdsConfig)) {
-      helper.updateBalancingState(
-          TRANSIENT_FAILURE,
-          new ErrorPicker(Status.UNAVAILABLE.withDescription(
-              "Load balancing config '" + lbConfig + "' is not a CdsConfig")));
-      return;
-    }
-    CdsConfig newCdsConfig = (CdsConfig) lbConfig;
 
     // If CdsConfig is changed, do a graceful switch.
     if (!newCdsConfig.equals(cdsConfig)) {
@@ -125,7 +132,7 @@ public final class CdsLoadBalancer extends LoadBalancer {
 
   @Override
   public void handleNameResolutionError(Status error) {
-    channelLogger.log(ChannelLogLevel.ERROR, "Name resolution error: {0}", error);
+    logger.log(XdsLogLevel.WARNING, "Received name resolution error: {0}", error);
     // Go into TRANSIENT_FAILURE if we have not yet received any cluster resource. Otherwise,
     // we keep running with the data we had previously.
     if (clusterWatcher == null) {
@@ -142,7 +149,7 @@ public final class CdsLoadBalancer extends LoadBalancer {
 
   @Override
   public void shutdown() {
-    channelLogger.log(ChannelLogLevel.DEBUG, "CDS load balancer is shutting down");
+    logger.log(XdsLogLevel.INFO, "Shutdown");
 
     switchingLoadBalancer.shutdown();
     if (xdsClientPool != null) {
@@ -206,8 +213,12 @@ public final class CdsLoadBalancer extends LoadBalancer {
           if (clusterWatcher != null) {
             if (clusterWatcher.edsBalancer != null) {
               clusterWatcher.edsBalancer.shutdown();
+              xdsClient.cancelClusterDataWatch(cdsConfig.clusterName, clusterWatcher);
+              logger.log(
+                  XdsLogLevel.INFO,
+                  "Cancelled cluster watcher on {0} with xDS client {1}",
+                  cdsConfig.clusterName, xdsClient);
             }
-            xdsClient.cancelClusterDataWatch(cdsConfig.name, clusterWatcher);
           }
         }
 
@@ -215,9 +226,17 @@ public final class CdsLoadBalancer extends LoadBalancer {
         public void handleResolvedAddresses(ResolvedAddresses resolvedAddresses) {
           if (clusterWatcher == null) {
             clusterWatcher = new ClusterWatcherImpl(helper, resolvedAddresses);
-            xdsClient.watchClusterData(cdsConfig.name, clusterWatcher);
+            logger.log(
+                XdsLogLevel.INFO,
+                "Start cluster watcher on {0} with xDS client {1}",
+                cdsConfig.clusterName, xdsClient);
+            xdsClient.watchClusterData(cdsConfig.clusterName, clusterWatcher);
             if (oldCdsConfig != null) {
-              xdsClient.cancelClusterDataWatch(oldCdsConfig.name, oldClusterWatcher);
+              xdsClient.cancelClusterDataWatch(oldCdsConfig.clusterName, oldClusterWatcher);
+              logger.log(
+                  XdsLogLevel.INFO,
+                  "Cancelled cluster watcher on {0} with xDS client {1}",
+                  oldCdsConfig.clusterName, xdsClient);
             }
             CdsLoadBalancer.this.clusterWatcher = clusterWatcher;
           }
@@ -295,8 +314,9 @@ public final class CdsLoadBalancer extends LoadBalancer {
 
     @Override
     public void onClusterChanged(ClusterUpdate newUpdate) {
-      channelLogger.log(
-          ChannelLogLevel.DEBUG, "CDS load balancer received a cluster update: {0}",  newUpdate);
+      logger.log(
+          XdsLogLevel.INFO,
+          "Received cluster update from xDS client {0}: {1}", xdsClient, newUpdate);
       checkArgument(
           newUpdate.getLbPolicy().equals("round_robin"),
           "The load balancing policy in ClusterUpdate '%s' is not supported", newUpdate);
@@ -337,8 +357,8 @@ public final class CdsLoadBalancer extends LoadBalancer {
 
     @Override
     public void onError(Status error) {
-      channelLogger.log(ChannelLogLevel.ERROR, "CDS load balancer received an error: {0}",  error);
-
+      logger.log(
+          XdsLogLevel.WARNING, "Received error from xDS client {0}: {1}", xdsClient, error);
       // Go into TRANSIENT_FAILURE if we have not yet created the child
       // policy (i.e., we have not yet received valid data for the cluster). Otherwise,
       // we keep running with the data we had previously.
