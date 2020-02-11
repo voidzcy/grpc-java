@@ -396,6 +396,12 @@ final class EdsLoadBalancer extends LoadBalancer {
     public void onEndpointChanged(EndpointUpdate endpointUpdate) {
       logger.log(
           XdsLogLevel.INFO,
+          "Received endpoint update from xDS client {0}: {1} localities, {2} drop categories",
+          xdsClient,
+          endpointUpdate.getLocalityLbEndpointsMap().size(),
+          endpointUpdate.getDropPolicies().size());
+      logger.log(
+          XdsLogLevel.DEBUG,
           "Received endpoint update from xDS client {0}: {1}", xdsClient, endpointUpdate);
 
       if (!firstEndpointUpdateReceived) {
