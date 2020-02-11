@@ -574,7 +574,7 @@ final class XdsClientImpl extends XdsClient {
     } else if (rdsRouteConfigName != null) {
       logger.log(
           XdsLogLevel.INFO,
-          "Use RDS to dynamically route config, resource name: {0}", rdsRouteConfigName);
+          "Use RDS to dynamically resolve route config, resource name: {0}", rdsRouteConfigName);
       // Send an RDS request if the resource to request has changed.
       if (!rdsRouteConfigName.equals(adsStream.rdsResourceName)) {
         adsStream.sendXdsRequest(ADS_TYPE_URL_RDS, ImmutableList.of(rdsRouteConfigName));
