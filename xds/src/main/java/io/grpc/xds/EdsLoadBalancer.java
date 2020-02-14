@@ -54,7 +54,6 @@ import javax.annotation.Nullable;
 
 /** Load balancer for the EDS LB policy. */
 final class EdsLoadBalancer extends LoadBalancer {
-  private final InternalLogId logId;
   private final XdsLogger logger;
   private final ResourceUpdateCallback resourceUpdateCallback;
   private final GracefulSwitchLoadBalancer switchingLoadBalancer;
@@ -99,8 +98,7 @@ final class EdsLoadBalancer extends LoadBalancer {
       LocalityStoreFactory localityStoreFactory,
       Bootstrapper bootstrapper,
       XdsChannelFactory channelFactory) {
-    logId = InternalLogId.allocate("eds-lb", null);
-    logger = new XdsLogger(logId);
+    logger = XdsLogger.withLogId(InternalLogId.allocate("eds-lb", null));
     this.edsLbHelper = edsLbHelper;
     this.resourceUpdateCallback = resourceUpdateCallback;
     this.lbRegistry = lbRegistry;

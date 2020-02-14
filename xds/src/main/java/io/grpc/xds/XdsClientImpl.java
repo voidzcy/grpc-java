@@ -172,7 +172,7 @@ final class XdsClientImpl extends XdsClient {
       BackoffPolicy.Provider backoffPolicyProvider,
       Supplier<Stopwatch> stopwatchSupplier) {
     logId = InternalLogId.allocate("xds-client", null);
-    logger = new XdsLogger(logId);
+    logger = XdsLogger.withLogId(logId);
     this.channel =
         checkNotNull(channelFactory, "channelFactory")
             .createChannel(checkNotNull(servers, "servers"));
@@ -229,7 +229,7 @@ final class XdsClientImpl extends XdsClient {
 
   @Override
   void watchConfigData(String hostName, int port, ConfigWatcher watcher) {
-    checkState(configWatcher == null, "watcher already registered");
+    checkState(configWatcher == null, "watcher for %s already registered", hostName);
     configWatcher = checkNotNull(watcher, "watcher");
     this.hostName = checkNotNull(hostName, "hostName");
     if (port == -1) {
@@ -264,7 +264,7 @@ final class XdsClientImpl extends XdsClient {
       clusterWatchers.put(clusterName, new HashSet<ClusterWatcher>());
     }
     Set<ClusterWatcher> watchers = clusterWatchers.get(clusterName);
-    checkState(!watchers.contains(watcher), "watcher already registered");
+    checkState(!watchers.contains(watcher), "watcher for %s already registered", clusterName);
     watchers.add(watcher);
     // If local cache contains cluster information to be watched, notify the watcher immediately.
     if (absentCdsResources.contains(clusterName)) {
@@ -303,7 +303,9 @@ final class XdsClientImpl extends XdsClient {
   void cancelClusterDataWatch(String clusterName, ClusterWatcher watcher) {
     checkNotNull(watcher, "watcher");
     Set<ClusterWatcher> watchers = clusterWatchers.get(clusterName);
-    checkState(watchers != null && watchers.contains(watcher), "watcher was not registered");
+    checkState(
+        watchers != null && watchers.contains(watcher),
+        "watcher for %s was not registered", clusterName);
     watchers.remove(watcher);
     if (watchers.isEmpty()) {
       logger.log(XdsLogLevel.INFO, "Stop watching cluster {0}", clusterName);
@@ -338,7 +340,7 @@ final class XdsClientImpl extends XdsClient {
       endpointWatchers.put(clusterName, new HashSet<EndpointWatcher>());
     }
     Set<EndpointWatcher> watchers = endpointWatchers.get(clusterName);
-    checkState(!watchers.contains(watcher), "watcher already registered");
+    checkState(!watchers.contains(watcher), "watcher for %s already registered", clusterName);
     watchers.add(watcher);
     // If local cache contains endpoint information for the cluster to be watched, notify
     // the watcher immediately.
@@ -380,7 +382,9 @@ final class XdsClientImpl extends XdsClient {
   void cancelEndpointDataWatch(String clusterName, EndpointWatcher watcher) {
     checkNotNull(watcher, "watcher");
     Set<EndpointWatcher> watchers = endpointWatchers.get(clusterName);
-    checkState(watchers != null && watchers.contains(watcher), "watcher was not registered");
+    checkState(
+        watchers != null && watchers.contains(watcher),
+        "watcher for %s was not registered", clusterName);
     watchers.remove(watcher);
     if (watchers.isEmpty()) {
       logger.log(XdsLogLevel.INFO, "Stop watching endpoints in cluster {0}", clusterName);

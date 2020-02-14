@@ -51,7 +51,6 @@ import javax.annotation.Nullable;
  * Load balancer for cds_experimental LB policy.
  */
 public final class CdsLoadBalancer extends LoadBalancer {
-  private final InternalLogId logId;
   private final XdsLogger logger;
   private final LoadBalancerRegistry lbRegistry;
   private final GracefulSwitchLoadBalancer switchingLoadBalancer;
@@ -78,8 +77,7 @@ public final class CdsLoadBalancer extends LoadBalancer {
   @VisibleForTesting
   CdsLoadBalancer(Helper helper, LoadBalancerRegistry lbRegistry,
       TlsContextManager tlsContextManager) {
-    logId = InternalLogId.allocate("cds-lb", null);
-    logger = new XdsLogger(logId);
+    logger = XdsLogger.withLogId(InternalLogId.allocate("cds-lb", null));
     this.helper = helper;
     this.lbRegistry = lbRegistry;
     this.switchingLoadBalancer = new GracefulSwitchLoadBalancer(helper);

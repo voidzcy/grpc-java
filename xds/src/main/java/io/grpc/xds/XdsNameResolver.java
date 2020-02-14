@@ -59,8 +59,7 @@ import javax.annotation.Nullable;
  */
 final class XdsNameResolver extends NameResolver {
 
-  private final XdsLogger logger = new XdsLogger(InternalLogId.allocate("xds-resolver", null));
-
+  private final XdsLogger logger;
   private final String authority;
   private final String hostName;
   private final int port;
@@ -97,6 +96,7 @@ final class XdsNameResolver extends NameResolver {
     this.backoffPolicyProvider = checkNotNull(backoffPolicyProvider, "backoffPolicyProvider");
     this.stopwatchSupplier = checkNotNull(stopwatchSupplier, "stopwatchSupplier");
     this.bootstrapper = checkNotNull(bootstrapper, "bootstrapper");
+    logger = XdsLogger.withLogId(InternalLogId.allocate("xds-resolver", null));
     logger.log(XdsLogLevel.INFO, "Created resolver for {0}", name);
   }
 
