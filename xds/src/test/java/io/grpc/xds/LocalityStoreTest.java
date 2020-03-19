@@ -1359,9 +1359,11 @@ public class LocalityStoreTest {
     }
 
     @Override
-    public void addLocality(Locality locality) {
+    public ClientLoadCounter addLocality(Locality locality) {
       assertThat(localityCounters).doesNotContainKey(locality);
-      localityCounters.put(locality, new ClientLoadCounter());
+      ClientLoadCounter counter = new ClientLoadCounter();
+      localityCounters.put(locality, counter);
+      return counter;
     }
 
     @Override

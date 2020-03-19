@@ -43,10 +43,9 @@ import javax.annotation.concurrent.NotThreadSafe;
 final class LoadStatsStoreImpl implements LoadStatsStore {
   private final String clusterName;
   @Nullable
-  @SuppressWarnings("unused")
   private final String clusterServiceName;
   private final ConcurrentMap<Locality, ClientLoadCounter> localityLoadCounters;
-  // Cluster level dropped request counts for each category decision made by xDS load balancer.
+  // Cluster level dropped request counts for each category.
   private final ConcurrentMap<String, AtomicLong> dropCounters;
 
   LoadStatsStoreImpl(String clusterName, @Nullable String clusterServiceName) {
@@ -70,7 +69,9 @@ final class LoadStatsStoreImpl implements LoadStatsStore {
   public ClusterStats generateLoadReport() {
     ClusterStats.Builder statsBuilder = ClusterStats.newBuilder();
     statsBuilder.setClusterName(clusterName);
-    // TODO(chengyuangzhang): also set cluster_service_name if provided.
+    if (clusterServiceName != null) {
+      statsBuilder.setClusterServiceName(clusterServiceName);
+    }
     for (Map.Entry<Locality, ClientLoadCounter> entry : localityLoadCounters.entrySet()) {
       ClientLoadSnapshot snapshot = entry.getValue().snapshot();
       UpstreamLocalityStats.Builder localityStatsBuilder =
@@ -107,15 +108,17 @@ final class LoadStatsStoreImpl implements LoadStatsStore {
   }
 
   @Override
-  public void addLocality(final Locality locality) {
+  public ClientLoadCounter addLocality(final Locality locality) {
     ClientLoadCounter counter = localityLoadCounters.get(locality);
     checkState(counter == null || !counter.isActive(),
         "An active counter for locality %s already exists", locality);
     if (counter == null) {
-      localityLoadCounters.put(locality, new ClientLoadCounter());
+      counter = new ClientLoadCounter();
+      localityLoadCounters.put(locality, counter);
     } else {
       counter.setActive(true);
     }
+    return counter;
   }
 
   @Override

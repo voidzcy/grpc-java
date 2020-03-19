@@ -45,6 +45,7 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class LoadStatsStoreImplTest {
   private static final String CLUSTER_NAME = "cluster-test.googleapis.com";
+  private static final String CLUSTER_SERVICE_NAME = "cluster-bar:service-blade";
   private static final Locality LOCALITY1 =
       new Locality("test_region1", "test_zone", "test_subzone");
   private static final Locality LOCALITY2 =
@@ -58,7 +59,8 @@ public class LoadStatsStoreImplTest {
     localityLoadCounters = new ConcurrentHashMap<>();
     dropCounters = new ConcurrentHashMap<>();
     loadStatsStore =
-        new LoadStatsStoreImpl(CLUSTER_NAME, null, localityLoadCounters, dropCounters);
+        new LoadStatsStoreImpl(
+            CLUSTER_NAME, CLUSTER_SERVICE_NAME, localityLoadCounters, dropCounters);
   }
 
   private static List<EndpointLoadMetricStats> buildEndpointLoadMetricStatsList(
@@ -158,6 +160,7 @@ public class LoadStatsStoreImplTest {
         .isEqualTo(new HashSet<>(expected.getLoadMetricStatsList()));
   }
 
+  @SuppressWarnings("deprecation")
   @Test
   public void addAndGetAndRemoveLocality() {
     loadStatsStore.addLocality(LOCALITY1);

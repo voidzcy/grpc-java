@@ -589,6 +589,7 @@ interface LocalityStore {
 
       private void initLocality(Locality locality) {
         logger.log(XdsLogLevel.INFO, "Create child balancer for locality {0}", locality);
+        @SuppressWarnings("deprecation")
         ChildHelper childHelper =
             new ChildHelper(locality, loadStatsStore.getLocalityCounter(locality),
                 orcaOobUtil);
