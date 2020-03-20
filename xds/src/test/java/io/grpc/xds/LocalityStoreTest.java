@@ -230,8 +230,8 @@ public class LocalityStoreTest {
         });
     lbRegistry.register(lbProvider);
     localityStore =
-        new LocalityStoreImpl(logId, helper, lbRegistry, random, loadStatsStore,
-            orcaPerRequestUtil, orcaOobUtil);
+        new LocalityStoreImpl(logId, helper, lbRegistry, random, orcaPerRequestUtil, orcaOobUtil);
+    localityStore.setLoadStatsStore(loadStatsStore);
   }
 
   @Test
@@ -1372,6 +1372,7 @@ public class LocalityStoreTest {
       localityCounters.remove(locality);
     }
 
+    @Deprecated
     @Nullable
     @Override
     public ClientLoadCounter getLocalityCounter(Locality locality) {

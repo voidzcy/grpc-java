@@ -77,6 +77,8 @@ interface LocalityStore {
 
   void updateOobMetricsReportInterval(long reportIntervalNano);
 
+  void setLoadStatsStore(@Nullable LoadStatsStore loadStatsStore);
+
   @VisibleForTesting
   abstract class LocalityStoreFactory {
     private static final LocalityStoreFactory DEFAULT_INSTANCE =
@@ -85,9 +87,8 @@ interface LocalityStore {
           LocalityStore newLocalityStore(
               InternalLogId logId,
               Helper helper,
-              LoadBalancerRegistry lbRegistry,
-              LoadStatsStore loadStatsStore) {
-            return new LocalityStoreImpl(logId, helper, lbRegistry, loadStatsStore);
+              LoadBalancerRegistry lbRegistry) {
+            return new LocalityStoreImpl(logId, helper, lbRegistry);
           }
         };
 
@@ -98,8 +99,7 @@ interface LocalityStore {
     abstract LocalityStore newLocalityStore(
         InternalLogId logId,
         Helper helper,
-        LoadBalancerRegistry lbRegistry,
-        LoadStatsStore loadStatsStore);
+        LoadBalancerRegistry lbRegistry);
   }
 
   final class LocalityStoreImpl implements LocalityStore {
@@ -110,7 +110,6 @@ interface LocalityStore {
     private final Helper helper;
     private final LoadBalancerProvider loadBalancerProvider;
     private final ThreadSafeRandom random;
-    private final LoadStatsStore loadStatsStore;
     private final OrcaPerRequestUtil orcaPerRequestUtil;
     private final OrcaOobUtil orcaOobUtil;
     private final PriorityManager priorityManager = new PriorityManager();
@@ -118,19 +117,15 @@ interface LocalityStore {
     // Most current set of localities instructed by traffic director
     private Set<Locality> localities = ImmutableSet.of();
     private List<DropOverload> dropOverloads = ImmutableList.of();
+    private LoadStatsStore loadStatsStore;
     private long metricsReportIntervalNano = -1;
 
-    LocalityStoreImpl(
-        InternalLogId logId,
-        Helper helper,
-        LoadBalancerRegistry lbRegistry,
-        LoadStatsStore loadStatsStore) {
+    LocalityStoreImpl(InternalLogId logId, Helper helper, LoadBalancerRegistry lbRegistry) {
       this(
           logId,
           helper,
           lbRegistry,
           ThreadSafeRandom.ThreadSafeRandomImpl.instance,
-          loadStatsStore,
           OrcaPerRequestUtil.getInstance(),
           OrcaOobUtil.getInstance());
     }
@@ -141,7 +136,6 @@ interface LocalityStore {
         Helper helper,
         LoadBalancerRegistry lbRegistry,
         ThreadSafeRandom random,
-        LoadStatsStore loadStatsStore,
         OrcaPerRequestUtil orcaPerRequestUtil,
         OrcaOobUtil orcaOobUtil) {
       this.helper = checkNotNull(helper, "helper");
@@ -149,7 +143,6 @@ interface LocalityStore {
           lbRegistry.getProvider(ROUND_ROBIN),
           "Unable to find '%s' LoadBalancer", ROUND_ROBIN);
       this.random = checkNotNull(random, "random");
-      this.loadStatsStore = checkNotNull(loadStatsStore, "loadStatsStore");
       this.orcaPerRequestUtil = checkNotNull(orcaPerRequestUtil, "orcaPerRequestUtil");
       this.orcaOobUtil = checkNotNull(orcaOobUtil, "orcaOobUtil");
       logger = XdsLogger.withLogId(checkNotNull(logId, "logId"));
@@ -160,15 +153,14 @@ interface LocalityStore {
       final List<DropOverload> dropOverloads;
       final SubchannelPicker delegate;
       final ThreadSafeRandom random;
-      final LoadStatsStore loadStatsStore;
 
       DroppablePicker(
-          List<DropOverload> dropOverloads, SubchannelPicker delegate,
-          ThreadSafeRandom random, LoadStatsStore loadStatsStore) {
+          List<DropOverload> dropOverloads,
+          SubchannelPicker delegate,
+          ThreadSafeRandom random) {
         this.dropOverloads = dropOverloads;
         this.delegate = delegate;
         this.random = random;
-        this.loadStatsStore = loadStatsStore;
       }
 
       @Override
@@ -179,7 +171,9 @@ interface LocalityStore {
             logger.log(
                 XdsLogLevel.INFO,
                 "Drop request with category: {0}", dropOverload.getCategory());
-            loadStatsStore.recordDroppedRequest(dropOverload.getCategory());
+            if (loadStatsStore != null) {
+              loadStatsStore.recordDroppedRequest(dropOverload.getCategory());
+            }
             return PickResult.withDrop(Status.UNAVAILABLE.withDescription(
                 "dropped by loadbalancer: " + dropOverload.toString()));
           }
@@ -203,8 +197,10 @@ interface LocalityStore {
       }
       localityMap.clear();
 
-      for (Locality locality : localities) {
-        loadStatsStore.removeLocality(locality);
+      if (loadStatsStore != null) {
+        for (Locality locality : localities) {
+          loadStatsStore.removeLocality(locality);
+        }
       }
       localities = ImmutableSet.of();
 
@@ -224,30 +220,32 @@ interface LocalityStore {
         }
       }
 
-      for (Locality newLocality : newLocalities) {
-        if (!localities.contains(newLocality)) {
-          loadStatsStore.addLocality(newLocality);
-        }
-      }
-      final Set<Locality> toBeRemovedFromStatsStore = new HashSet<>();
-      // There is a race between picking a subchannel and updating localities, which leads to
-      // the possibility that RPCs will be sent to a removed locality. As a result, those RPC
-      // loads will not be recorded. We consider this to be natural. By removing locality counters
-      // after updating subchannel pickers, we eliminate the race and conservatively record loads
-      // happening in that period.
-      for (Locality oldLocality : localities) {
-        if (!localityInfoMap.containsKey(oldLocality)) {
-          toBeRemovedFromStatsStore.add(oldLocality);
-        }
-      }
-      helper.getSynchronizationContext().execute(new Runnable() {
-        @Override
-        public void run() {
-          for (Locality locality : toBeRemovedFromStatsStore) {
-            loadStatsStore.removeLocality(locality);
+      if (loadStatsStore != null) {
+        for (Locality newLocality : newLocalities) {
+          if (!localities.contains(newLocality)) {
+            loadStatsStore.addLocality(newLocality);
           }
         }
-      });
+        final Set<Locality> toBeRemovedFromStatsStore = new HashSet<>();
+        // There is a race between picking a subchannel and updating localities, which leads to
+        // the possibility that RPCs will be sent to a removed locality. As a result, those RPC
+        // loads will not be recorded. We consider this to be natural. By removing locality counters
+        // after updating subchannel pickers, we eliminate the race and conservatively record loads
+        // happening in that period.
+        for (Locality oldLocality : localities) {
+          if (!localityInfoMap.containsKey(oldLocality)) {
+            toBeRemovedFromStatsStore.add(oldLocality);
+          }
+        }
+        helper.getSynchronizationContext().execute(new Runnable() {
+          @Override
+          public void run() {
+            for (Locality locality : toBeRemovedFromStatsStore) {
+              loadStatsStore.removeLocality(locality);
+            }
+          }
+        });
+      }
       localities = newLocalities;
 
       priorityManager.updateLocalities(localityInfoMap);
@@ -297,6 +295,11 @@ interface LocalityStore {
       }
     }
 
+    @Override
+    public void setLoadStatsStore(@Nullable LoadStatsStore loadStatsStore) {
+      this.loadStatsStore = loadStatsStore;
+    }
+
     @Nullable
     private static ConnectivityState aggregateState(
         @Nullable ConnectivityState overallState, ConnectivityState childState) {
@@ -329,7 +332,7 @@ interface LocalityStore {
       }
 
       if (!dropOverloads.isEmpty()) {
-        picker = new DroppablePicker(dropOverloads, picker, random, loadStatsStore);
+        picker = new DroppablePicker(dropOverloads, picker, random);
       }
 
       if (state != null) {
@@ -378,16 +381,15 @@ interface LocalityStore {
     }
 
     class ChildHelper extends ForwardingLoadBalancerHelper {
-
-      private final OrcaReportingHelperWrapper orcaReportingHelperWrapper;
-
+      private OrcaReportingHelperWrapper orcaReportingHelperWrapper;
       private SubchannelPicker currentChildPicker = XdsSubchannelPickers.BUFFER_PICKER;
       private ConnectivityState currentChildState = CONNECTING;
 
-      ChildHelper(final Locality locality, final ClientLoadCounter counter,
+      ChildHelper(
+          final Locality locality,
+          @Nullable final ClientLoadCounter counter,
           OrcaOobUtil orcaOobUtil) {
         checkNotNull(locality, "locality");
-        checkNotNull(counter, "counter");
         checkNotNull(orcaOobUtil, "orcaOobUtil");
         Helper delegate = new ForwardingLoadBalancerHelper() {
           @Override
@@ -404,10 +406,15 @@ interface LocalityStore {
                 XdsLogLevel.INFO,
                 "Update load balancing state for locality {0} to {1}", locality, newState);
             currentChildState = newState;
-            currentChildPicker =
-                new LoadRecordingSubchannelPicker(counter,
-                    new MetricsObservingSubchannelPicker(new MetricsRecordingListener(counter),
-                        newPicker, orcaPerRequestUtil));
+            if (counter != null) {
+              currentChildPicker =
+                  new LoadRecordingSubchannelPicker(counter,
+                      new MetricsObservingSubchannelPicker(new MetricsRecordingListener(counter),
+                          newPicker, orcaPerRequestUtil));
+
+            } else {
+              currentChildPicker = newPicker;
+            }
 
             // delegate to parent helper
             priorityManager.updatePriorityState(priorityManager.getPriority(locality));
@@ -424,10 +431,11 @@ interface LocalityStore {
             return locality.getSubzone();
           }
         };
-        orcaReportingHelperWrapper =
-            checkNotNull(orcaOobUtil, "orcaOobUtil")
-                .newOrcaReportingHelperWrapper(delegate, new MetricsRecordingListener(counter));
-
+        if (counter != null) {
+          orcaReportingHelperWrapper =
+              orcaOobUtil
+                  .newOrcaReportingHelperWrapper(delegate, new MetricsRecordingListener(counter));
+        }
         if (metricsReportIntervalNano > 0) {
           updateMetricsReportInterval(metricsReportIntervalNano);
         }
@@ -587,12 +595,15 @@ interface LocalityStore {
         updatePriorityState(currentPriority);
       }
 
+      @SuppressWarnings("deprecation")
       private void initLocality(Locality locality) {
         logger.log(XdsLogLevel.INFO, "Create child balancer for locality {0}", locality);
-        @SuppressWarnings("deprecation")
+        ClientLoadCounter loadCounter = null;
+        if (loadStatsStore != null) {
+          loadCounter = loadStatsStore.getLocalityCounter(locality);
+        }
         ChildHelper childHelper =
-            new ChildHelper(locality, loadStatsStore.getLocalityCounter(locality),
-                orcaOobUtil);
+            new ChildHelper(locality, loadCounter, orcaOobUtil);
         LocalityLbInfo localityLbInfo =
             new LocalityLbInfo(
                 locality,

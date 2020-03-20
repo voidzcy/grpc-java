@@ -65,6 +65,7 @@ import io.grpc.xds.LoadReportClient.LoadReportCallback;
 import io.grpc.xds.XdsLogger.XdsLogLevel;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -137,6 +138,9 @@ final class XdsClientImpl extends XdsClient {
   // Endpoint watchers waiting for endpoint updates for each cluster. Multiple endpoint
   // watchers can watch endpoints in the same cluster.
   private final Map<String, Set<EndpointWatcher>> endpointWatchers = new HashMap<>();
+
+  // Load stats for each cluster:cluster_service.
+  private final Map<String, Map<String, LoadStatsStore>> loadStatsStoreMap = new HashMap<>();
 
   // Resource fetch timers are used to conclude absence of resources. Each timer is activated when
   // subscription for the resource starts and disarmed on first update for the resource.
@@ -472,10 +476,13 @@ final class XdsClientImpl extends XdsClient {
               timeService,
               backoffPolicyProvider,
               stopwatchSupplier);
-      lrsClient.startLoadReporting(new LoadReportCallback() {
+      LoadReportCallback callback = new LoadReportCallback() {
         @Override
-        public void onReportResponse(long reportIntervalNano) {}
-      });
+        public void onReportResponse(long reportIntervalNano) {
+          // Noop
+        }
+      };
+      lrsClient.startLoadReporting(callback, Collections.unmodifiableMap(loadStatsStoreMap));
     }
     logger.log(
         XdsLogLevel.INFO,
@@ -494,6 +501,80 @@ final class XdsClientImpl extends XdsClient {
     lrsClient.removeLoadStatsStore(clusterName, clusterServiceName);
     // TODO(chengyuanzhang): can be optimized to stop load reporting if no more loads need
     //  to be reported.
+  }
+
+  @Override
+  LoadStatsStore enableLoadReporting(
+      String lrsServerName, String clusterName, @Nullable String clusterServiceName) {
+    checkArgument(lrsServerName.isEmpty(), "can only report load to the same management server");
+    checkState(
+        !loadStatsStoreMap.containsKey(clusterName)
+            || loadStatsStoreMap.get(clusterName).containsKey(clusterServiceName),
+        "load reporting for %s:%s already enabled", clusterName, clusterServiceName);
+    LoadStatsStore loadStatsStore = new LoadStatsStoreImpl(clusterName, clusterServiceName);
+    if (!loadStatsStoreMap.containsKey(clusterName)) {
+      loadStatsStoreMap.put(clusterName, new HashMap<String, LoadStatsStore>());
+    }
+    loadStatsStoreMap.get(clusterName).put(clusterServiceName, loadStatsStore);
+    if (lrsClient == null) {
+      lrsClient =
+          new LoadReportClient(
+              logId,
+              targetName,
+              channel,
+              node,
+              syncContext,
+              timeService,
+              backoffPolicyProvider,
+              stopwatchSupplier);
+      LoadReportCallback callback = new LoadReportCallback() {
+        @Override
+        public void onReportResponse(long reportIntervalNano) {
+          // Noop
+        }
+      };
+      lrsClient.startLoadReporting(callback, Collections.unmodifiableMap(loadStatsStoreMap));
+    }
+    return loadStatsStore;
+  }
+
+  @Override
+  void disableLoadReporting(String clusterName, String clusterServiceName) {
+    checkState(
+        loadStatsStoreMap.containsKey(clusterName)
+            && loadStatsStoreMap.get(clusterName).containsKey(clusterServiceName),
+        "load reporting for %s:%s already disabled", clusterName, clusterServiceName);
+    Map<String, LoadStatsStore> clusterServiceStatsStores = loadStatsStoreMap.get(clusterName);
+    clusterServiceStatsStores.remove(clusterServiceName);
+    if (clusterServiceStatsStores.isEmpty()) {
+      loadStatsStoreMap.remove(clusterName);
+    }
+    if (loadStatsStoreMap.isEmpty()) {
+      lrsClient.stopLoadReporting();
+      lrsClient = null;
+    }
+  }
+
+  @Override
+  ClientLoadCounter addClusterLocalityStats(String clusterName, String clusterServiceName,
+      Locality locality) {
+    checkState(
+        loadStatsStoreMap.containsKey(clusterName)
+            && loadStatsStoreMap.get(clusterName).containsKey(clusterServiceName),
+        "load reporting for %s:%s was not enabled", clusterName, clusterServiceName);
+    LoadStatsStore loadStatsStore = loadStatsStoreMap.get(clusterName).get(clusterServiceName);
+    return loadStatsStore.addLocality(locality);
+  }
+
+  @Override
+  void removeClusterLocalityStats(String clusterName, String clusterServiceName,
+      Locality locality) {
+    checkState(
+        loadStatsStoreMap.containsKey(clusterName)
+            && loadStatsStoreMap.get(clusterName).containsKey(clusterServiceName),
+        "load reporting for %s:%s was not enabled", clusterName, clusterServiceName);
+    LoadStatsStore loadStatsStore = loadStatsStoreMap.get(clusterName).get(clusterServiceName);
+    loadStatsStore.removeLocality(locality);
   }
 
   @Override

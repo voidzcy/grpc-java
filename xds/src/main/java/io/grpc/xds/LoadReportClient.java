@@ -39,6 +39,7 @@ import io.grpc.SynchronizationContext.ScheduledHandle;
 import io.grpc.internal.BackoffPolicy;
 import io.grpc.stub.StreamObserver;
 import io.grpc.xds.XdsLogger.XdsLogLevel;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -67,7 +68,7 @@ final class LoadReportClient {
   private final BackoffPolicy.Provider backoffPolicyProvider;
 
   // Sources of load stats data for each cluster:cluster_service.
-  private final Map<String, Map<String, LoadStatsStore>> loadStatsStoreMap = new HashMap<>();
+  private Map<String, Map<String, LoadStatsStore>> loadStatsStoreMap = Collections.emptyMap();
   private boolean started;
 
   @Nullable
@@ -109,22 +110,23 @@ final class LoadReportClient {
   }
 
   /**
-   * Establishes load reporting communication and negotiates with traffic director to report load
-   * stats periodically. Calling this method on an already started {@link LoadReportClient} is
-   * no-op.
+   * Establishes load reporting communication and negotiates with the management server to report
+   * load stats periodically. {@code clusterStats} provides the load stats data to be reported.
    */
-  void startLoadReporting(LoadReportCallback callback) {
+  void startLoadReporting(
+      LoadReportCallback callback,
+      Map<String, Map<String, LoadStatsStore>> clusterStats) {
     if (started) {
       return;
     }
+    this.loadStatsStoreMap = clusterStats;
     this.callback = callback;
     started = true;
     startLrsRpc();
   }
 
   /**
-   * Terminates load reporting. Calling this method on an already stopped
-   * {@link LoadReportClient} is no-op.
+   * Terminates load reporting.
    */
   void stopLoadReporting() {
     if (!started) {

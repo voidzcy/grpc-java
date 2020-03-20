@@ -121,6 +121,7 @@ public class LoadReportClientTest {
       });
   private final InternalLogId logId = InternalLogId.allocate("lrs-client-test", null);
   private final FakeClock fakeClock = new FakeClock();
+  private final Map<String, Map<String, LoadStatsStore>> loadStatsStoreMap = new HashMap<>();
   private final ArrayDeque<StreamObserver<LoadStatsRequest>> lrsRequestObservers =
       new ArrayDeque<>();
   private final AtomicBoolean callEnded = new AtomicBoolean(true);
@@ -189,7 +190,7 @@ public class LoadReportClientTest {
             fakeClock.getScheduledExecutorService(),
             backoffPolicyProvider,
             fakeClock.getStopwatchSupplier());
-    lrsClient.startLoadReporting(callback);
+    lrsClient.startLoadReporting(callback, loadStatsStoreMap);
   }
 
   @After
@@ -210,7 +211,8 @@ public class LoadReportClientTest {
     String cluster1 = "cluster-foo.googleapis.com";
     ClusterStats rawStats1 = generateClusterLoadStats(cluster1, null);
     when(loadStatsStore1.generateLoadReport()).thenReturn(rawStats1);
-    lrsClient.addLoadStatsStore(cluster1, null, loadStatsStore1);
+    loadStatsStoreMap.put(cluster1, new HashMap<String, LoadStatsStore>());
+    loadStatsStoreMap.get(cluster1).put(null, loadStatsStore1);
 
     // Management server asks to report loads for cluster1.
     responseObserver.onNext(buildLrsResponse(ImmutableList.of(cluster1), 1000));
@@ -229,7 +231,8 @@ public class LoadReportClientTest {
     String cluster2 = "cluster-bar.googleapis.com";
     ClusterStats rawStats2 = generateClusterLoadStats(cluster2, null);
     when(loadStatsStore2.generateLoadReport()).thenReturn(rawStats2);
-    lrsClient.addLoadStatsStore(cluster2, null, loadStatsStore2);
+    loadStatsStoreMap.put(cluster2, new HashMap<String, LoadStatsStore>());
+    loadStatsStoreMap.get(cluster2).put(null, loadStatsStore2);
 
     // Management server updates the interval of sending load reports, while still asking for
     // loads to cluster1 only.
@@ -284,7 +287,8 @@ public class LoadReportClientTest {
     String clusterServiceName = "service-blade.googleapis.com";
     ClusterStats stats = generateClusterLoadStats(clusterName, clusterServiceName);
     when(loadStatsStore1.generateLoadReport()).thenReturn(stats);
-    lrsClient.addLoadStatsStore(clusterName, null, loadStatsStore1);
+    loadStatsStoreMap.put(clusterName, new HashMap<String, LoadStatsStore>());
+    loadStatsStoreMap.get(clusterName).put(clusterServiceName, loadStatsStore1);
 
     // First balancer RPC
     verify(requestObserver).onNext(eq(buildInitialRequest()));
@@ -388,7 +392,8 @@ public class LoadReportClientTest {
     String clusterServiceName = "service-blade.googleapis.com";
     ClusterStats stats = generateClusterLoadStats(clusterName, clusterServiceName);
     when(loadStatsStore1.generateLoadReport()).thenReturn(stats);
-    lrsClient.addLoadStatsStore(clusterName, null, loadStatsStore1);
+    loadStatsStoreMap.put(clusterName, new HashMap<String, LoadStatsStore>());
+    loadStatsStoreMap.get(clusterName).put(null, loadStatsStore1);
 
     // First balancer RPC
     verify(requestObserver).onNext(eq(buildInitialRequest()));

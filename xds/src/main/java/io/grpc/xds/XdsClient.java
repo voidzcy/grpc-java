@@ -498,6 +498,41 @@ abstract class XdsClient {
   }
 
   /**
+   * Starts reporting loads for {@code clusterName}:{@code clusterServiceName} to the management
+   * server with name {@code lrsServerName}. The {@link LoadStatsStore} instance is returned to
+   * allow the caller adding in loads stats data to be reported.
+   *
+   * <p>Currently, we assume all invocations provide the same {@code lrsServerName}, which is an
+   * empty string.
+   */
+  LoadStatsStore enableLoadReporting(
+      String lrsServerName, String clusterName, @Nullable String clusterServiceName) {
+    throw new UnsupportedOperationException();
+  }
+
+  /**
+   * Stops reporting load for @code clusterName}:{@code clusterServiceName} to the management
+   * server.
+   */
+  void disableLoadReporting(String clusterName, @Nullable String clusterServiceName) {
+  }
+
+  /**
+   * Creates a {@link ClientLoadCounter} instance for recording loads sent to the given locality.
+   */
+  ClientLoadCounter addClusterLocalityStats(
+      String clusterName, @Nullable String clusterServiceName, Locality locality) {
+    throw new UnsupportedOperationException();
+  }
+
+  /**
+   * Removes the {@link ClientLoadCounter} instance for recording loads sent to the given locality.
+   */
+  void removeClusterLocalityStats(
+      String clusterName, @Nullable String clusterServiceName, Locality locality) {
+  }
+
+  /**
    * Report client load stats to a remote server for the given cluster:cluster_service.
    *
    * <p>Note: currently we can only report loads for a single cluster:cluster_service,
