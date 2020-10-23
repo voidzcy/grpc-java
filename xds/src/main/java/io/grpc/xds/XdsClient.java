@@ -197,6 +197,7 @@ abstract class XdsClient {
 
   static final class CdsUpdate implements ResourceUpdate {
     private final String clusterName;
+    private final ClusterType clusterType;
     @Nullable
     private final String edsServiceName;
     private final String lbPolicy;
@@ -204,13 +205,11 @@ abstract class XdsClient {
     private final String lrsServerName;
     private final UpstreamTlsContext upstreamTlsContext;
 
-    private CdsUpdate(
-        String clusterName,
-        @Nullable String edsServiceName,
-        String lbPolicy,
-        @Nullable String lrsServerName,
+    private CdsUpdate(String clusterName, ClusterType clusterType, @Nullable String edsServiceName,
+        String lbPolicy, @Nullable String lrsServerName,
         @Nullable UpstreamTlsContext upstreamTlsContext) {
       this.clusterName = clusterName;
+      this.clusterType = clusterType;
       this.edsServiceName = edsServiceName;
       this.lbPolicy = lbPolicy;
       this.lrsServerName = lrsServerName;
@@ -219,6 +218,10 @@ abstract class XdsClient {
 
     String getClusterName() {
       return clusterName;
+    }
+
+    ClusterType getClusterType() {
+      return clusterType;
     }
 
     /**
@@ -258,6 +261,7 @@ abstract class XdsClient {
           MoreObjects
               .toStringHelper(this)
               .add("clusterName", clusterName)
+              .add("clusterType", clusterType)
               .add("edsServiceName", edsServiceName)
               .add("lbPolicy", lbPolicy)
               .add("lrsServerName", lrsServerName)
@@ -268,7 +272,7 @@ abstract class XdsClient {
     @Override
     public int hashCode() {
       return Objects.hash(
-          clusterName, edsServiceName, lbPolicy, lrsServerName, upstreamTlsContext);
+          clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName, upstreamTlsContext);
     }
 
     @Override
@@ -281,18 +285,24 @@ abstract class XdsClient {
       }
       CdsUpdate that = (CdsUpdate) o;
       return Objects.equals(clusterName, that.clusterName)
+          && Objects.equals(clusterType, that.clusterType)
           && Objects.equals(edsServiceName, that.edsServiceName)
           && Objects.equals(lbPolicy, that.lbPolicy)
           && Objects.equals(lrsServerName, that.lrsServerName)
           && Objects.equals(upstreamTlsContext, that.upstreamTlsContext);
     }
 
-    static Builder newBuilder() {
-      return new Builder();
+    static Builder newBuilder(ClusterType type, String name) {
+      return new Builder(type, name);
+    }
+
+    enum ClusterType {
+      EDS, LOGICAL_DNS, AGGREGATE
     }
 
     static final class Builder {
-      private String clusterName;
+      private final String clusterName;
+      private final ClusterType clusterType;
       @Nullable
       private String edsServiceName;
       private String lbPolicy;
@@ -301,12 +311,9 @@ abstract class XdsClient {
       @Nullable
       private UpstreamTlsContext upstreamTlsContext;
 
-      private Builder() {
-      }
-
-      Builder setClusterName(String clusterName) {
-        this.clusterName = clusterName;
-        return this;
+      private Builder(ClusterType clusterType, String clusterName) {
+        this.clusterType = checkNotNull(clusterType, "clusterType");
+        this.clusterName = checkNotNull(clusterName, "clusterName");
       }
 
       Builder setEdsServiceName(String edsServiceName) {
@@ -330,12 +337,9 @@ abstract class XdsClient {
       }
 
       CdsUpdate build() {
-        checkState(clusterName != null, "clusterName is not set");
         checkState(lbPolicy != null, "lbPolicy is not set");
-
-        return
-            new CdsUpdate(
-                clusterName, edsServiceName, lbPolicy, lrsServerName, upstreamTlsContext);
+        return new CdsUpdate(clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName,
+            upstreamTlsContext);
       }
     }
   }
