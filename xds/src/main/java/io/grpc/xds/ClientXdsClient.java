@@ -25,7 +25,9 @@ import com.google.common.base.Supplier;
 import com.google.protobuf.Any;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.Durations;
+import io.envoyproxy.envoy.config.cluster.aggregate.v2alpha.ClusterConfig;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster;
+import io.envoyproxy.envoy.config.cluster.v3.Cluster.CustomClusterType;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.DiscoveryType;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.EdsClusterConfig;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.LbPolicy;
@@ -46,6 +48,7 @@ import io.grpc.xds.EnvoyProtoData.LocalityLbEndpoints;
 import io.grpc.xds.EnvoyProtoData.Node;
 import io.grpc.xds.EnvoyProtoData.StructOrError;
 import io.grpc.xds.LoadStatsManager.LoadStatsStore;
+import io.grpc.xds.XdsClient.CdsUpdate.ClusterType;
 import io.grpc.xds.XdsLogger.XdsLogLevel;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -275,7 +278,6 @@ final class ClientXdsClient extends AbstractXdsClient {
     }
     getLogger().log(XdsLogLevel.INFO, "Received CDS response for resources: {0}", clusterNames);
 
-    String errorMessage = null;
     // Cluster information update for requested clusters received in this CDS response.
     Map<String, CdsUpdate> cdsUpdates = new HashMap<>();
     // CDS responses represents the state of the world, EDS services not referenced by
@@ -290,34 +292,65 @@ final class ClientXdsClient extends AbstractXdsClient {
       if (!cdsResourceSubscribers.containsKey(clusterName)) {
         continue;
       }
-      CdsUpdate.Builder updateBuilder = CdsUpdate.newBuilder();
-      updateBuilder.setClusterName(clusterName);
-      // The type field must be set to EDS.
-      if (!cluster.getType().equals(DiscoveryType.EDS)) {
-        errorMessage = "Cluster " + clusterName + " : only EDS discovery type is supported "
-            + "in gRPC.";
-        break;
-      }
-      // In the eds_cluster_config field, the eds_config field must be set to indicate to
-      // use EDS (must be set to use ADS).
-      EdsClusterConfig edsClusterConfig = cluster.getEdsClusterConfig();
-      if (!edsClusterConfig.getEdsConfig().hasAds()) {
-        errorMessage = "Cluster " + clusterName + " : field eds_cluster_config must be set to "
-            + "indicate to use EDS over ADS.";
-        break;
-      }
-      // If the service_name field is set, that value will be used for the EDS request.
-      if (!edsClusterConfig.getServiceName().isEmpty()) {
-        updateBuilder.setEdsServiceName(edsClusterConfig.getServiceName());
-        edsServices.add(edsClusterConfig.getServiceName());
-      } else {
-        edsServices.add(clusterName);
+      CdsUpdate.Builder updateBuilder;
+      switch (cluster.getClusterDiscoveryTypeCase()) {
+        case TYPE:
+          DiscoveryType type = cluster.getType();
+          if (type.equals(DiscoveryType.EDS)) {
+            // In the eds_cluster_config field, the eds_config field must be set to indicate to
+            // use EDS (must be set to use ADS).
+            EdsClusterConfig edsClusterConfig = cluster.getEdsClusterConfig();
+            if (!edsClusterConfig.getEdsConfig().hasAds()) {
+              nackResponse(ResourceType.CDS, nonce, "Cluster " + clusterName + ": "
+                  + "field eds_cluster_config must be set to indicate to use EDS over ADS.");
+              return;
+            }
+            updateBuilder = CdsUpdate.newBuilder(ClusterType.EDS, clusterName);
+            // If the service_name field is set, that value will be used for the EDS request.
+            if (!edsClusterConfig.getServiceName().isEmpty()) {
+              updateBuilder.setEdsServiceName(edsClusterConfig.getServiceName());
+              edsServices.add(edsClusterConfig.getServiceName());
+            } else {
+              edsServices.add(clusterName);
+            }
+          } else if(!type.equals(DiscoveryType.LOGICAL_DNS)) {
+            updateBuilder = CdsUpdate.newBuilder(ClusterType.LOGICAL_DNS, clusterName);
+          } else {
+            nackResponse(ResourceType.CDS, nonce,
+                "Cluster " + clusterName + ": unsupported built-in discovery type: " + type);
+            return;
+          }
+          break;
+        case CLUSTER_TYPE:
+          CustomClusterType customType = cluster.getClusterType();
+          String typeName = customType.getName();
+          if (!typeName.equals("envoy.cluster.aggregate")) {
+            nackResponse(ResourceType.CDS, nonce,
+                "Cluster " + clusterName + ": unsupported custom cluster type: " + typeName);
+            return;
+          }
+          ClusterConfig clusterConfig;
+          try {
+            clusterConfig = customType.getTypedConfig().unpack(ClusterConfig.class);
+          } catch (InvalidProtocolBufferException e) {
+            nackResponse(ResourceType.CDS, nonce,
+                "Cluster " + clusterName + ": invalid cluster config: " + e);
+            return;
+          }
+          updateBuilder = CdsUpdate.newBuilder(ClusterType.AGGREGATE, clusterName);
+          updateBuilder.setPrioritizedClusterNames(clusterConfig.getClustersList());
+          break;
+        case CLUSTERDISCOVERYTYPE_NOT_SET:
+        default:
+          nackResponse(ResourceType.CDS, nonce,
+              "Cluster " + clusterName + ": cluster discovery type unspecified");
+          return;
       }
       // The lb_policy field must be set to ROUND_ROBIN.
       if (!cluster.getLbPolicy().equals(LbPolicy.ROUND_ROBIN)) {
-        errorMessage = "Cluster " + clusterName + " : only round robin load balancing policy is "
-            + "supported in gRPC.";
-        break;
+        nackResponse(ResourceType.CDS, nonce,
+            "Cluster " + clusterName + ": unsupported Lb policy: " + cluster.getLbPolicy());
+        return;
       }
       updateBuilder.setLbPolicy("round_robin");
       // If the lrs_server field is set, it must have its self field set, in which case the
@@ -325,9 +358,9 @@ final class ClientXdsClient extends AbstractXdsClient {
       // LRS load reporting will be disabled.
       if (cluster.hasLrsServer()) {
         if (!cluster.getLrsServer().hasSelf()) {
-          errorMessage = "Cluster " + clusterName + " : only support enabling LRS for the same "
-              + "management server.";
-          break;
+          nackResponse(ResourceType.CDS, nonce,
+              "Cluster " + clusterName + ": only support LRS for the same management server");
+          return;
         }
         updateBuilder.setLrsServerName("");
       }
@@ -338,14 +371,11 @@ final class ClientXdsClient extends AbstractXdsClient {
           updateBuilder.setUpstreamTlsContext(upstreamTlsContext);
         }
       } catch (InvalidProtocolBufferException e) {
-        errorMessage = "Cluster " + clusterName + " : " + e.getMessage();
-        break;
+        nackResponse(ResourceType.CDS, nonce,
+            "Cluster " + clusterName + ": invalid upstream TLS context: " + e);
+        return;
       }
       cdsUpdates.put(clusterName, updateBuilder.build());
-    }
-    if (errorMessage != null) {
-      nackResponse(ResourceType.CDS, nonce, errorMessage);
-      return;
     }
     ackResponse(ResourceType.CDS, versionInfo, nonce);
 
