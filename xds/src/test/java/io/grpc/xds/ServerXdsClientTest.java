@@ -56,7 +56,6 @@ import io.grpc.Context.CancellationListener;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.Status.Code;
-import io.grpc.SynchronizationContext;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.internal.BackoffPolicy;
@@ -65,7 +64,6 @@ import io.grpc.internal.FakeClock.TaskFilter;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.GrpcCleanupRule;
 import io.grpc.xds.AbstractXdsClient.ResourceType;
-import io.grpc.xds.EnvoyProtoData.Address;
 import io.grpc.xds.EnvoyProtoData.Node;
 import io.grpc.xds.XdsClient.ListenerUpdate;
 import io.grpc.xds.XdsClient.ListenerWatcher;
@@ -102,6 +100,7 @@ public class ServerXdsClientTest {
   private static final int PORT = 7000;
   private static final String LOCAL_IP = "192.168.3.5";
   private static final String DIFFERENT_IP = "192.168.3.6";
+  private static final String INSTANCE_IP = "192.168.3.7";
   private static final String TYPE_URL_HCM =
       "type.googleapis.com/"
           + "envoy.config.filter.network.http_connection_manager.v2.HttpConnectionManager";
@@ -127,13 +126,6 @@ public class ServerXdsClientTest {
   @Rule
   public final GrpcCleanupRule cleanupRule = new GrpcCleanupRule();
 
-  private final SynchronizationContext syncContext = new SynchronizationContext(
-      new Thread.UncaughtExceptionHandler() {
-        @Override
-        public void uncaughtException(Thread t, Throwable e) {
-          throw new AssertionError(e);
-        }
-      });
   private final FakeClock fakeClock = new FakeClock();
 
   private final Queue<StreamObserver<DiscoveryResponse>> responseObservers = new ArrayDeque<>();
@@ -197,8 +189,8 @@ public class ServerXdsClientTest {
 
     xdsClient =
         new ServerXdsClient(new XdsChannel(channel, /* useProtocolV3= */ false), NODE,
-            syncContext, fakeClock.getScheduledExecutorService(), backoffPolicyProvider,
-            fakeClock.getStopwatchSupplier());
+            fakeClock.getScheduledExecutorService(), backoffPolicyProvider,
+            fakeClock.getStopwatchSupplier(), false, INSTANCE_IP);
     // Only the connection to management server is established, no RPC request is sent until at
     // least one watcher is registered.
     assertThat(responseObservers).isEmpty();
@@ -218,11 +210,11 @@ public class ServerXdsClientTest {
     if (NODE.getMetadata() != null) {
       newMetadata.putAll(NODE.getMetadata());
     }
-    newMetadata.put("TRAFFICDIRECTOR_PROXYLESS", "1");
-    Address listeningAddress = new Address("0.0.0.0", PORT);
+    newMetadata.put("TRAFFICDIRECTOR_INBOUND_INTERCEPTION_PORT", "15001");
+    newMetadata.put("TRAFFICDIRECTOR_INBOUND_BACKEND_PORTS", "" + PORT);
+    newMetadata.put("INSTANCE_IP", INSTANCE_IP);
     return NODE.toBuilder()
         .setMetadata(newMetadata)
-        .addListeningAddresses(listeningAddress)
         .build();
   }
 
@@ -236,7 +228,6 @@ public class ServerXdsClientTest {
         .build();
   }
 
-  /** Error when 2 ListenerWatchers registered. */
   @Test
   public void ldsResponse_2listenerWatchers_expectError() {
     xdsClient.watchListenerData(PORT, listenerWatcher);
@@ -332,7 +323,7 @@ public class ServerXdsClientTest {
                                 ImmutableList.of("bar.googleapis.com"),
                                 "cluster-bar.googleapis.com"))))
                 .build()))),
-        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, 15001, "0.0.0.0",
+        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, 15002, "0.0.0.0",
             filterChainOutbound,
             filterChainInbound
         )));
@@ -384,7 +375,7 @@ public class ServerXdsClientTest {
                                 ImmutableList.of("bar.googleapis.com"),
                                 "cluster-bar.googleapis.com"))))
                 .build()))),
-        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, PORT, "0.0.0.0",
+        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, 15001, "0.0.0.0",
             filterChainOutbound,
             filterChainInbound
         )));
@@ -402,7 +393,7 @@ public class ServerXdsClientTest {
     ListenerUpdate configUpdate = listenerUpdateCaptor.getValue();
     EnvoyServerProtoData.Listener listener = configUpdate.getListener();
     assertThat(listener.getName()).isEqualTo(LISTENER_NAME);
-    assertThat(listener.getAddress()).isEqualTo("0.0.0.0:" + PORT);
+    assertThat(listener.getAddress()).isEqualTo("0.0.0.0:15001");
     assertThat(listener.getFilterChains()).hasSize(2);
     EnvoyServerProtoData.FilterChain filterChainOutboundInListenerUpdate
         = listener.getFilterChains().get(0);
@@ -459,7 +450,7 @@ public class ServerXdsClientTest {
                                 ImmutableList.of("bar.googleapis.com"),
                                 "cluster-bar.googleapis.com"))))
                 .build()))),
-        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, PORT, "0.0.0.0",
+        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, 15001, "0.0.0.0",
             filterChainOutbound,
             filterChainInbound
         )));
@@ -483,7 +474,7 @@ public class ServerXdsClientTest {
             "ROOTCA2"),
         buildTestFilter("envoy.http_connection_manager"));
     List<Any> listeners1 = ImmutableList.of(
-        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, PORT, "0.0.0.0",
+        Any.pack(buildListenerWithFilterChain(LISTENER_NAME, 15001, "0.0.0.0",
             filterChainNewInbound
         )));
     DiscoveryResponse response1 =

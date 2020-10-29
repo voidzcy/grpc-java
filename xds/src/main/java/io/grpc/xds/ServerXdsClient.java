@@ -23,14 +23,15 @@ import static com.google.common.base.Preconditions.checkState;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Any;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.envoyproxy.envoy.config.core.v3.Address;
+import io.envoyproxy.envoy.config.core.v3.TrafficDirection;
 import io.envoyproxy.envoy.config.listener.v3.FilterChain;
 import io.envoyproxy.envoy.config.listener.v3.FilterChainMatch;
 import io.envoyproxy.envoy.config.listener.v3.Listener;
 import io.grpc.Status;
-import io.grpc.SynchronizationContext;
 import io.grpc.SynchronizationContext.ScheduledHandle;
 import io.grpc.internal.BackoffPolicy;
 import io.grpc.xds.EnvoyProtoData.Node;
@@ -52,45 +53,57 @@ final class ServerXdsClient extends AbstractXdsClient {
   // Longest time to wait, since the subscription to some resource, for concluding its absence.
   @VisibleForTesting
   static final int INITIAL_RESOURCE_FETCH_TIMEOUT_SEC = 15;
-  private final SynchronizationContext syncContext;
   @Nullable
   private ListenerWatcher listenerWatcher;
   private int listenerPort = -1;
+  private final boolean newServerApi;
+  @Nullable private final String instanceIp;
   @Nullable
   private ScheduledHandle ldsRespTimer;
 
-  ServerXdsClient(XdsChannel channel, Node node, SynchronizationContext syncContext,
-      ScheduledExecutorService timeService, BackoffPolicy.Provider backoffPolicyProvider,
-      Supplier<Stopwatch> stopwatchSupplier) {
+  ServerXdsClient(XdsChannel channel, Node node, ScheduledExecutorService timeService,
+      BackoffPolicy.Provider backoffPolicyProvider, Supplier<Stopwatch> stopwatchSupplier,
+      boolean newServerApi, String instanceIp) {
     super(channel, node, timeService, backoffPolicyProvider, stopwatchSupplier);
-    this.syncContext = checkNotNull(syncContext, "syncContext");
+    this.newServerApi = channel.isUseProtocolV3() && newServerApi;
+    this.instanceIp = (instanceIp != null ? instanceIp : "0.0.0.0");
   }
 
   @Override
-  void watchListenerData(int port, ListenerWatcher watcher) {
+  void watchListenerData(final int port, final ListenerWatcher watcher) {
     checkState(listenerWatcher == null, "ListenerWatcher already registered");
     listenerWatcher = checkNotNull(watcher, "watcher");
     checkArgument(port > 0, "port needs to be > 0");
-    this.listenerPort = port;
-    getLogger().log(XdsLogLevel.INFO, "Started watching listener for port {0}", port);
-    updateNodeMetadataForListenerRequest(port);
-    adjustResourceSubscription(ResourceType.LDS);
-    if (!isInBackoff()) {
-      ldsRespTimer =
-          syncContext
-              .schedule(
-                  new ListenerResourceFetchTimeoutTask(":" + port),
-                  INITIAL_RESOURCE_FETCH_TIMEOUT_SEC, TimeUnit.SECONDS, getTimeService());
-    }
+    listenerPort = port;
+    getSyncContext().execute(new Runnable() {
+      @Override
+      public void run() {
+        getLogger().log(XdsLogLevel.INFO, "Started watching listener for port {0}", port);
+        if (!newServerApi) {
+          updateNodeMetadataForListenerRequest(port);
+        }
+        adjustResourceSubscription(ResourceType.LDS);
+        if (!isInBackoff()) {
+          ldsRespTimer =
+              getSyncContext()
+                  .schedule(
+                      new ListenerResourceFetchTimeoutTask(":" + port),
+                      INITIAL_RESOURCE_FETCH_TIMEOUT_SEC, TimeUnit.SECONDS, getTimeService());
+        }
+      }
+    });
   }
 
   @Nullable
   @Override
   Collection<String> getSubscribedResources(ResourceType type) {
-    if (type != ResourceType.LDS || listenerWatcher == null) {
-      return null;
+    if (newServerApi) {
+      String listeningAddress = instanceIp + ":" + listenerPort;
+      String resourceName = "grpc/server?udpa.resource.listening_address=" + listeningAddress;
+      return ImmutableList.<String>of(resourceName);
+    } else {
+      return Collections.emptyList();
     }
-    return Collections.emptyList();
   }
 
   /** In case of Listener watcher metadata to be updated to include port. */
@@ -99,12 +112,10 @@ final class ServerXdsClient extends AbstractXdsClient {
     if (node.getMetadata() != null) {
       newMetadata.putAll(node.getMetadata());
     }
-    newMetadata.put("TRAFFICDIRECTOR_PROXYLESS", "1");
-    // TODO(sanjaypujare): eliminate usage of listening_addresses.
-    EnvoyProtoData.Address listeningAddress =
-        new EnvoyProtoData.Address("0.0.0.0", port);
-    node =
-        node.toBuilder().setMetadata(newMetadata).addListeningAddresses(listeningAddress).build();
+    newMetadata.put("TRAFFICDIRECTOR_INBOUND_INTERCEPTION_PORT", "15001");
+    newMetadata.put("TRAFFICDIRECTOR_INBOUND_BACKEND_PORTS", "" + port);
+    newMetadata.put("INSTANCE_IP", instanceIp);
+    node = node.toBuilder().setMetadata(newMetadata).build();
   }
 
   @Override
@@ -156,15 +167,18 @@ final class ServerXdsClient extends AbstractXdsClient {
   }
 
   private boolean isRequestedListener(Listener listener) {
-    // TODO(sanjaypujare): check listener.getName() once we know what xDS server returns
+    if (newServerApi) {
+      return "TRAFFICDIRECTOR_INBOUND_LISTENER".equals(listener.getName())
+              && listener.getTrafficDirection().equals(TrafficDirection.INBOUND)
+              && hasMatchingFilter(listener.getFilterChainsList());
+    }
     return isAddressMatching(listener.getAddress())
         && hasMatchingFilter(listener.getFilterChainsList());
   }
 
   private boolean isAddressMatching(Address address) {
-    // TODO(sanjaypujare): check IP address once we know xDS server will include it
-    return address.hasSocketAddress()
-        && (address.getSocketAddress().getPortValue() == listenerPort);
+    return newServerApi || (address.hasSocketAddress()
+            && (address.getSocketAddress().getPortValue() == 15001));
   }
 
   private boolean hasMatchingFilter(List<FilterChain> filterChainsList) {
@@ -191,7 +205,7 @@ final class ServerXdsClient extends AbstractXdsClient {
   protected void handleStreamRestarted() {
     if (listenerWatcher != null) {
       ldsRespTimer =
-          syncContext
+          getSyncContext()
               .schedule(
                   new ListenerResourceFetchTimeoutTask(":" + listenerPort),
                   INITIAL_RESOURCE_FETCH_TIMEOUT_SEC, TimeUnit.SECONDS, getTimeService());
@@ -201,11 +215,6 @@ final class ServerXdsClient extends AbstractXdsClient {
   @Override
   protected void handleShutdown() {
     cleanUpResourceTimer();
-  }
-
-  @Override
-  protected void runWithSynchronized(Runnable runnable) {
-    syncContext.execute(runnable);
   }
 
   private void cleanUpResourceTimer() {
