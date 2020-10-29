@@ -203,16 +203,21 @@ abstract class XdsClient {
     private final String lbPolicy;
     @Nullable
     private final String lrsServerName;
+    @Nullable
+    private final List<String> prioritizedClusterNames;
+    @Nullable
     private final UpstreamTlsContext upstreamTlsContext;
 
     private CdsUpdate(String clusterName, ClusterType clusterType, @Nullable String edsServiceName,
         String lbPolicy, @Nullable String lrsServerName,
+        @Nullable List<String> prioritizedClusterNames,
         @Nullable UpstreamTlsContext upstreamTlsContext) {
       this.clusterName = clusterName;
       this.clusterType = clusterType;
       this.edsServiceName = edsServiceName;
       this.lbPolicy = lbPolicy;
       this.lrsServerName = lrsServerName;
+      this.prioritizedClusterNames = Collections.unmodifiableList(prioritizedClusterNames);
       this.upstreamTlsContext = upstreamTlsContext;
     }
 
@@ -249,6 +254,15 @@ abstract class XdsClient {
       return lrsServerName;
     }
 
+    /**
+     * Returns the list of underlying clusters making of the cluster represented by this {@code
+     * CdsUpdate} if it is of type {@link ClusterType#AGGREGATE}. Otherwise, returns {@code null}.
+     */
+    @Nullable
+    List<String> getPrioritizedClusterNames() {
+      return prioritizedClusterNames;
+    }
+
     /** Returns the {@link UpstreamTlsContext} for this cluster if present, else null. */
     @Nullable
     UpstreamTlsContext getUpstreamTlsContext() {
@@ -265,14 +279,15 @@ abstract class XdsClient {
               .add("edsServiceName", edsServiceName)
               .add("lbPolicy", lbPolicy)
               .add("lrsServerName", lrsServerName)
+              .add("prioritizedClusterNames", prioritizedClusterNames)
               .add("upstreamTlsContext", upstreamTlsContext)
               .toString();
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(
-          clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName, upstreamTlsContext);
+      return Objects.hash(clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName,
+          prioritizedClusterNames, upstreamTlsContext);
     }
 
     @Override
@@ -289,6 +304,7 @@ abstract class XdsClient {
           && Objects.equals(edsServiceName, that.edsServiceName)
           && Objects.equals(lbPolicy, that.lbPolicy)
           && Objects.equals(lrsServerName, that.lrsServerName)
+          && Objects.equals(prioritizedClusterNames, that.prioritizedClusterNames)
           && Objects.equals(upstreamTlsContext, that.upstreamTlsContext);
     }
 
@@ -308,6 +324,7 @@ abstract class XdsClient {
       private String lbPolicy;
       @Nullable
       private String lrsServerName;
+      private List<String> prioritizedClusterNames;
       @Nullable
       private UpstreamTlsContext upstreamTlsContext;
 
@@ -331,6 +348,11 @@ abstract class XdsClient {
         return this;
       }
 
+      Builder setPrioritizedClusterNames(List<String> prioritizedClusterNames) {
+        this.prioritizedClusterNames = new ArrayList<>(prioritizedClusterNames);
+        return this;
+      }
+
       Builder setUpstreamTlsContext(UpstreamTlsContext upstreamTlsContext) {
         this.upstreamTlsContext = upstreamTlsContext;
         return this;
@@ -339,7 +361,7 @@ abstract class XdsClient {
       CdsUpdate build() {
         checkState(lbPolicy != null, "lbPolicy is not set");
         return new CdsUpdate(clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName,
-            upstreamTlsContext);
+            prioritizedClusterNames, upstreamTlsContext);
       }
     }
   }
