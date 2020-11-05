@@ -44,6 +44,7 @@ import io.grpc.xds.CdsLoadBalancerProvider.CdsConfig;
 import io.grpc.xds.EdsLoadBalancerProvider.EdsConfig;
 import io.grpc.xds.EnvoyServerProtoData.DownstreamTlsContext;
 import io.grpc.xds.EnvoyServerProtoData.UpstreamTlsContext;
+import io.grpc.xds.XdsClient.CdsUpdate.ClusterType;
 import io.grpc.xds.internal.sds.CommonTlsContextTestsUtil;
 import io.grpc.xds.internal.sds.SslContextProvider;
 import io.grpc.xds.internal.sds.SslContextProviderSupplier;
@@ -332,8 +333,7 @@ public class CdsLoadBalancerTest {
         @Override
         public void run() {
           watcher.onChanged(
-              CdsUpdate.newBuilder()
-                  .setClusterName(CLUSTER)
+              CdsUpdate.newBuilder(ClusterType.EDS, CLUSTER)
                   .setEdsServiceName(edsServiceName)
                   .setLbPolicy("round_robin")  // only supported policy
                   .setLrsServerName(lrsServerName)
@@ -349,8 +349,7 @@ public class CdsLoadBalancerTest {
         @Override
         public void run() {
           watcher.onChanged(
-              CdsUpdate.newBuilder()
-                  .setClusterName(CLUSTER)
+              CdsUpdate.newBuilder(ClusterType.EDS, CLUSTER)
                   .setEdsServiceName(edsServiceName)
                   .setLbPolicy("round_robin")  // only supported policy
                   .setLrsServerName(lrsServerName)

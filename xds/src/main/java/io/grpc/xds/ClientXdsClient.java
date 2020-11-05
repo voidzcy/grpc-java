@@ -25,7 +25,6 @@ import com.google.common.base.Supplier;
 import com.google.protobuf.Any;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.Durations;
-import io.envoyproxy.envoy.config.cluster.aggregate.v2alpha.ClusterConfig;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.CustomClusterType;
 import io.envoyproxy.envoy.config.cluster.v3.Cluster.DiscoveryType;
@@ -37,6 +36,7 @@ import io.envoyproxy.envoy.config.endpoint.v3.LbEndpoint;
 import io.envoyproxy.envoy.config.listener.v3.Listener;
 import io.envoyproxy.envoy.config.route.v3.RouteConfiguration;
 import io.envoyproxy.envoy.config.route.v3.VirtualHost;
+import io.envoyproxy.envoy.extensions.clusters.aggregate.v3.ClusterConfig;
 import io.envoyproxy.envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager;
 import io.envoyproxy.envoy.extensions.filters.network.http_connection_manager.v3.Rds;
 import io.envoyproxy.envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext;
@@ -81,6 +81,10 @@ final class ClientXdsClient extends AbstractXdsClient {
       "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext";
   private static final String TYPE_URL_UPSTREAM_TLS_CONTEXT_V2 =
       "type.googleapis.com/envoy.api.v2.auth.UpstreamTlsContext";
+  private static final String TYPE_URL_CLUSTER_CONFIG_V2 =
+      "type.googleapis.com/envoy.config.cluster.aggregate.v2alpha.ClusterConfig";
+  private static final String TYPE_URL_CLUSTER_CONFIG =
+      "type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig";
 
   private final Map<String, ResourceSubscriber> ldsResourceSubscribers = new HashMap<>();
   private final Map<String, ResourceSubscriber> rdsResourceSubscribers = new HashMap<>();
@@ -316,7 +320,7 @@ final class ClientXdsClient extends AbstractXdsClient {
             } else {
               edsServices.add(clusterName);
             }
-          } else if(!type.equals(DiscoveryType.LOGICAL_DNS)) {
+          } else if (!type.equals(DiscoveryType.LOGICAL_DNS)) {
             updateBuilder = CdsUpdate.newBuilder(ClusterType.LOGICAL_DNS, clusterName);
           } else {
             nackResponse(ResourceType.CDS, nonce,
@@ -333,8 +337,13 @@ final class ClientXdsClient extends AbstractXdsClient {
             return;
           }
           ClusterConfig clusterConfig;
+          Any unpackedClusterConfig = customType.getTypedConfig();
+          if (unpackedClusterConfig.getTypeUrl().equals(TYPE_URL_CLUSTER_CONFIG_V2)) {
+            unpackedClusterConfig =
+                unpackedClusterConfig.toBuilder().setTypeUrl(TYPE_URL_CLUSTER_CONFIG).build();
+          }
           try {
-            clusterConfig = customType.getTypedConfig().unpack(ClusterConfig.class);
+            clusterConfig = unpackedClusterConfig.unpack(ClusterConfig.class);
           } catch (InvalidProtocolBufferException e) {
             nackResponse(ResourceType.CDS, nonce,
                 "Cluster " + clusterName + ": invalid cluster config: " + e);

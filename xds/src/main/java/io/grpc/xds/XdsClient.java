@@ -214,7 +214,8 @@ abstract class XdsClient {
       this.edsServiceName = edsServiceName;
       this.lbPolicy = lbPolicy;
       this.lrsServerName = lrsServerName;
-      this.prioritizedClusterNames = Collections.unmodifiableList(prioritizedClusterNames);
+      this.prioritizedClusterNames = prioritizedClusterNames == null
+          ? null : Collections.unmodifiableList(prioritizedClusterNames);
       this.upstreamTlsContext = upstreamTlsContext;
     }
 
