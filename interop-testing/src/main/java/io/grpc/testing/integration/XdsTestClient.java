@@ -341,13 +341,18 @@ public final class XdsTestClient {
               new StreamObserver<SimpleResponse>() {
                 @Override
                 public void onCompleted() {
+                  if (printResponse) {
+                    logger.log(Level.WARNING, "RequestId {0}, Rpc completed, hostname: {1}",
+                        new Object[] {requestId, hostnameRef.get()});
+                  }
                   handleRpcCompleted(requestId, rpcType, hostnameRef.get(), savedWatchers);
                 }
 
                 @Override
                 public void onError(Throwable t) {
                   if (printResponse) {
-                    logger.log(Level.WARNING, "Rpc failed: {0}", t);
+                    logger.log(Level.WARNING, "RequestId {0}, hostname: {1}, Rpc failed: {2},",
+                        new Object[] {requestId, hostnameRef.get(), t});
                   }
                   handleRpcError(requestId, rpcType, hostnameRef.get(), savedWatchers);
                 }
