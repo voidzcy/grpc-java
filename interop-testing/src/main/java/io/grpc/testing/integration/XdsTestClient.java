@@ -154,7 +154,7 @@ public final class XdsTestClient {
         break;
       }
     }
-    rpcConfig = new RpcConfig(rpcTypes, metadata);
+    rpcConfig = new RpcConfig(rpcTypes, metadata,20);
 
     if (usage) {
       XdsTestClient c = new XdsTestClient();
@@ -270,11 +270,11 @@ public final class XdsTestClient {
           if (headers == null)  {
             headers = new Metadata();
           }
-          makeRpc(type, headers);
+          makeRpc(type, headers, config.timeoutSec);
         }
       }
 
-      private void makeRpc(final RpcType rpcType, final Metadata headersToSend) {
+      private void makeRpc(final RpcType rpcType, final Metadata headersToSend, int timeoutSec) {
         final long requestId;
         final Set<XdsStatsWatcher> savedWatchers = new HashSet<>();
         synchronized (lock) {
@@ -288,7 +288,7 @@ public final class XdsTestClient {
         final AtomicReference<ClientCall<?, ?>> clientCallRef = new AtomicReference<>();
         final AtomicReference<String> hostnameRef = new AtomicReference<>();
         stub =
-            stub.withDeadlineAfter(rpcTimeoutSec, TimeUnit.SECONDS)
+            stub.withDeadlineAfter(timeoutSec, TimeUnit.SECONDS)
                 .withInterceptors(
                     new ClientInterceptor() {
                       @Override
@@ -430,7 +430,7 @@ public final class XdsTestClient {
             metadata.getValue());
         newMetadata.put(metadata.getType(), md);
       }
-      rpcConfig = new RpcConfig(request.getTypesList(), newMetadata);
+      rpcConfig = new RpcConfig(request.getTypesList(), newMetadata, Integer.MAX_VALUE);
       responseObserver.onNext(ClientConfigureResponse.getDefaultInstance());
       responseObserver.onCompleted();
     }
@@ -472,10 +472,12 @@ public final class XdsTestClient {
   private static final class RpcConfig {
     private final List<RpcType> rpcTypes;
     private final EnumMap<RpcType, Metadata> metadata;
+    private final int timeoutSec;
 
-    private RpcConfig(List<RpcType> rpcTypes, EnumMap<RpcType, Metadata> metadata) {
+    private RpcConfig(List<RpcType> rpcTypes, EnumMap<RpcType, Metadata> metadata, int timeoutSec) {
       this.rpcTypes = rpcTypes;
       this.metadata = metadata;
+      this.timeoutSec = timeoutSec;
     }
   }
 
