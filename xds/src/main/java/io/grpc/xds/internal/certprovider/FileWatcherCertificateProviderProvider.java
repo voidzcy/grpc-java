@@ -21,52 +21,54 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.google.protobuf.Duration;
+import com.google.protobuf.util.Durations;
 import io.grpc.internal.JsonUtil;
 import io.grpc.internal.TimeProvider;
+import java.text.ParseException;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
 /**
- * Provider of {@link DynamicReloadingCertificateProvider}s.
+ * Provider of {@link FileWatcherCertificateProvider}s.
  */
-final class DynamicReloadingCertificateProviderProvider implements CertificateProviderProvider {
+final class FileWatcherCertificateProviderProvider implements CertificateProviderProvider {
 
-  private static final String DIRECTORY_KEY = "directory";
-  private static final String CERT_FILE_KEY = "certificate-file";
-  private static final String KEY_FILE_KEY = "private-key-file";
-  private static final String ROOT_FILE_KEY = "ca-certificate-file";
-  private static final String REFRESH_INTERVAL_KEY = "refresh-interval";
+  private static final String CERT_FILE_KEY = "certificate_file";
+  private static final String KEY_FILE_KEY = "private_key_file";
+  private static final String ROOT_FILE_KEY = "ca_certificate_file";
+  private static final String REFRESH_INTERVAL_KEY = "refresh_interval";
 
   @VisibleForTesting static final long REFRESH_INTERVAL_DEFAULT = 600L;
 
 
-  static final String DYNAMIC_RELOADING_PROVIDER_NAME = "gke-cas-certs";
+  static final String FILE_WATCHER_PROVIDER_NAME = "file_watcher";
 
-  final DynamicReloadingCertificateProvider.Factory dynamicReloadingCertificateProviderFactory;
+  final FileWatcherCertificateProvider.Factory fileWatcherCertificateProviderFactory;
   private final ScheduledExecutorServiceFactory scheduledExecutorServiceFactory;
   private final TimeProvider timeProvider;
 
-  DynamicReloadingCertificateProviderProvider() {
+  FileWatcherCertificateProviderProvider() {
     this(
-        DynamicReloadingCertificateProvider.Factory.getInstance(),
+        FileWatcherCertificateProvider.Factory.getInstance(),
         ScheduledExecutorServiceFactory.DEFAULT_INSTANCE,
         TimeProvider.SYSTEM_TIME_PROVIDER);
   }
 
   @VisibleForTesting
-  DynamicReloadingCertificateProviderProvider(
-      DynamicReloadingCertificateProvider.Factory dynamicReloadingCertificateProviderFactory,
+  FileWatcherCertificateProviderProvider(
+      FileWatcherCertificateProvider.Factory fileWatcherCertificateProviderFactory,
       ScheduledExecutorServiceFactory scheduledExecutorServiceFactory,
       TimeProvider timeProvider) {
-    this.dynamicReloadingCertificateProviderFactory = dynamicReloadingCertificateProviderFactory;
+    this.fileWatcherCertificateProviderFactory = fileWatcherCertificateProviderFactory;
     this.scheduledExecutorServiceFactory = scheduledExecutorServiceFactory;
     this.timeProvider = timeProvider;
   }
 
   @Override
   public String getName() {
-    return DYNAMIC_RELOADING_PROVIDER_NAME;
+    return FILE_WATCHER_PROVIDER_NAME;
   }
 
   @Override
@@ -74,10 +76,9 @@ final class DynamicReloadingCertificateProviderProvider implements CertificatePr
       Object config, CertificateProvider.DistributorWatcher watcher, boolean notifyCertUpdates) {
 
     Config configObj = validateAndTranslateConfig(config);
-    return dynamicReloadingCertificateProviderFactory.create(
+    return fileWatcherCertificateProviderFactory.create(
         watcher,
         notifyCertUpdates,
-        configObj.directory,
         configObj.certFile,
         configObj.keyFile,
         configObj.rootFile,
@@ -95,11 +96,18 @@ final class DynamicReloadingCertificateProviderProvider implements CertificatePr
     @SuppressWarnings("unchecked") Map<String, ?> map = (Map<String, ?>)config;
 
     Config configObj = new Config();
-    configObj.directory = checkForNullAndGet(map, DIRECTORY_KEY);
     configObj.certFile = checkForNullAndGet(map, CERT_FILE_KEY);
     configObj.keyFile = checkForNullAndGet(map, KEY_FILE_KEY);
     configObj.rootFile = checkForNullAndGet(map, ROOT_FILE_KEY);
-    configObj.refrehInterval = JsonUtil.getNumberAsLong(map, REFRESH_INTERVAL_KEY);
+    String refreshIntervalString = JsonUtil.getString(map, REFRESH_INTERVAL_KEY);
+    if (refreshIntervalString != null) {
+      try {
+        Duration duration = Durations.parse(refreshIntervalString);
+        configObj.refrehInterval = duration.getSeconds();
+      } catch (ParseException e) {
+        throw new IllegalArgumentException(e);
+      }
+    }
     if (configObj.refrehInterval == null) {
       configObj.refrehInterval = REFRESH_INTERVAL_DEFAULT;
     }
@@ -115,7 +123,7 @@ final class DynamicReloadingCertificateProviderProvider implements CertificatePr
           ScheduledExecutorService create() {
             return Executors.newSingleThreadScheduledExecutor(
                 new ThreadFactoryBuilder()
-                    .setNameFormat("dynamicReloading" + "-%d")
+                    .setNameFormat("fileWatcher" + "-%d")
                     .setDaemon(true)
                     .build());
           }
@@ -127,7 +135,6 @@ final class DynamicReloadingCertificateProviderProvider implements CertificatePr
   /** POJO class for storing various config values. */
   @VisibleForTesting
   static class Config {
-    String directory;
     String certFile;
     String keyFile;
     String rootFile;
