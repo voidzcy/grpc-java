@@ -201,12 +201,18 @@ abstract class XdsClient {
     @Nullable
     private final String lrsServerName;
     @Nullable
+    private final Long maxConcurrentRequests;
     private final List<String> prioritizedClusterNames;
     @Nullable
     private final UpstreamTlsContext upstreamTlsContext;
 
-    private CdsUpdate(String clusterName, ClusterType clusterType, @Nullable String edsServiceName,
-        String lbPolicy, @Nullable String lrsServerName,
+    private CdsUpdate(
+        String clusterName,
+        ClusterType clusterType,
+        @Nullable String edsServiceName,
+        String lbPolicy,
+        @Nullable String lrsServerName,
+        @Nullable Long maxConcurrentRequests,
         @Nullable List<String> prioritizedClusterNames,
         @Nullable UpstreamTlsContext upstreamTlsContext) {
       this.clusterName = clusterName;
@@ -214,6 +220,7 @@ abstract class XdsClient {
       this.edsServiceName = edsServiceName;
       this.lbPolicy = lbPolicy;
       this.lrsServerName = lrsServerName;
+      this.maxConcurrentRequests = maxConcurrentRequests;
       this.prioritizedClusterNames = prioritizedClusterNames == null
           ? null : Collections.unmodifiableList(prioritizedClusterNames);
       this.upstreamTlsContext = upstreamTlsContext;
@@ -253,6 +260,15 @@ abstract class XdsClient {
     }
 
     /**
+     * Returns the maximum number of outstanding requests can be made to the upstream cluster, or
+     * {@code null} if not configured.
+     */
+    @Nullable
+    Long getMaxConcurrentRequests() {
+      return maxConcurrentRequests;
+    }
+
+    /**
      * Returns the list of underlying clusters making of the cluster represented by this {@code
      * CdsUpdate} if it is of type {@link ClusterType#AGGREGATE}. Otherwise, returns {@code null}.
      */
@@ -277,6 +293,7 @@ abstract class XdsClient {
               .add("edsServiceName", edsServiceName)
               .add("lbPolicy", lbPolicy)
               .add("lrsServerName", lrsServerName)
+              .add("maxConcurrentRequests", maxConcurrentRequests)
               .add("prioritizedClusterNames", prioritizedClusterNames)
               .add("upstreamTlsContext", upstreamTlsContext)
               .toString();
@@ -284,8 +301,8 @@ abstract class XdsClient {
 
     @Override
     public int hashCode() {
-      return Objects.hash(clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName,
-          prioritizedClusterNames, upstreamTlsContext);
+      return Objects.hash(clusterName, edsServiceName, lbPolicy, lrsServerName,
+          maxConcurrentRequests, prioritizedClusterNames, upstreamTlsContext);
     }
 
     @Override
@@ -302,6 +319,7 @@ abstract class XdsClient {
           && Objects.equals(edsServiceName, that.edsServiceName)
           && Objects.equals(lbPolicy, that.lbPolicy)
           && Objects.equals(lrsServerName, that.lrsServerName)
+          && Objects.equals(maxConcurrentRequests, that.maxConcurrentRequests)
           && Objects.equals(prioritizedClusterNames, that.prioritizedClusterNames)
           && Objects.equals(upstreamTlsContext, that.upstreamTlsContext);
     }
@@ -322,6 +340,8 @@ abstract class XdsClient {
       private String lbPolicy;
       @Nullable
       private String lrsServerName;
+      @Nullable
+      private Long maxConcurrentRequests;
       private List<String> prioritizedClusterNames;
       @Nullable
       private UpstreamTlsContext upstreamTlsContext;
@@ -346,6 +366,11 @@ abstract class XdsClient {
         return this;
       }
 
+      Builder setMaxConcurrentRequests(long maxConcurrentRequests) {
+        this.maxConcurrentRequests = maxConcurrentRequests;
+        return this;
+      }
+
       Builder setPrioritizedClusterNames(List<String> prioritizedClusterNames) {
         this.prioritizedClusterNames = new ArrayList<>(prioritizedClusterNames);
         return this;
@@ -359,7 +384,7 @@ abstract class XdsClient {
       CdsUpdate build() {
         checkState(lbPolicy != null, "lbPolicy is not set");
         return new CdsUpdate(clusterName, clusterType, edsServiceName, lbPolicy, lrsServerName,
-            prioritizedClusterNames, upstreamTlsContext);
+            maxConcurrentRequests, prioritizedClusterNames, upstreamTlsContext);
       }
     }
   }
