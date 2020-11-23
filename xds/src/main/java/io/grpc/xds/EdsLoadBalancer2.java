@@ -54,6 +54,7 @@ import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedTargetConfig;
 import io.grpc.xds.XdsClient.EdsResourceWatcher;
 import io.grpc.xds.XdsClient.EdsUpdate;
 import io.grpc.xds.XdsLogger.XdsLogLevel;
+import io.grpc.xds.XdsNameResolverProvider.CallCounterProvider;
 import io.grpc.xds.XdsSubchannelPickers.ErrorPicker;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,14 +69,22 @@ import javax.annotation.Nullable;
 final class EdsLoadBalancer2 extends LoadBalancer {
   @VisibleForTesting
   static final long DEFAULT_PER_CLUSTER_MAX_CONCURRENT_REQUESTS = 1024L;
+  @VisibleForTesting
+  static boolean enableCircuitBreaking =
+      Boolean.parseBoolean(System.getenv("GRPC_XDS_EXPERIMENTAL_CIRCUIT_BREAKING"));
+
   private final XdsLogger logger;
   private final SynchronizationContext syncContext;
   private final LoadBalancerRegistry lbRegistry;
   private final ThreadSafeRandom random;
   private final GracefulSwitchLoadBalancer switchingLoadBalancer;
+
+  // Following fields are effectively final.
   private ObjectPool<XdsClient> xdsClientPool;
   private XdsClient xdsClient;
+  private CallCounterProvider callCounterProvider;
   private String cluster;
+
   private EdsLbState edsLbState;
 
   EdsLoadBalancer2(LoadBalancer.Helper helper) {
@@ -83,8 +92,8 @@ final class EdsLoadBalancer2 extends LoadBalancer {
   }
 
   @VisibleForTesting
-  EdsLoadBalancer2(
-      LoadBalancer.Helper helper, LoadBalancerRegistry lbRegistry, ThreadSafeRandom random) {
+  EdsLoadBalancer2(LoadBalancer.Helper helper, LoadBalancerRegistry lbRegistry,
+      ThreadSafeRandom random) {
     this.lbRegistry = checkNotNull(lbRegistry, "lbRegistry");
     this.random = checkNotNull(random, "random");
     syncContext = checkNotNull(helper, "helper").getSynchronizationContext();
@@ -100,6 +109,10 @@ final class EdsLoadBalancer2 extends LoadBalancer {
     if (xdsClientPool == null) {
       xdsClientPool = resolvedAddresses.getAttributes().get(XdsAttributes.XDS_CLIENT_POOL);
       xdsClient = xdsClientPool.getObject();
+    }
+    if (callCounterProvider == null) {
+      callCounterProvider =
+          resolvedAddresses.getAttributes().get(XdsAttributes.CALL_COUNTER_PROVIDER);
     }
     EdsConfig config = (EdsConfig) resolvedAddresses.getLoadBalancingPolicyConfig();
     if (logger.isLoggable(XdsLogLevel.INFO)) {
@@ -160,7 +173,7 @@ final class EdsLoadBalancer2 extends LoadBalancer {
     }
 
     private final class ChildLbState extends LoadBalancer implements EdsResourceWatcher {
-      private final AtomicLong requestCount = new AtomicLong();
+      private final AtomicLong requestCount;
       @Nullable
       private final LoadStatsStore loadStatsStore;
       private final RequestLimitingLbHelper lbHelper;
@@ -175,6 +188,7 @@ final class EdsLoadBalancer2 extends LoadBalancer {
       private LoadBalancer lb;
 
       private ChildLbState(Helper helper) {
+        requestCount = callCounterProvider.getOrCreate(cluster, edsServiceName);
         if (lrsServerName != null) {
           loadStatsStore = xdsClient.addClientStats(cluster, edsServiceName);
         } else {
@@ -432,17 +446,19 @@ final class EdsLoadBalancer2 extends LoadBalancer {
               }
             }
             PickResult result = delegate.pickSubchannel(args);
-            if (result.getStatus().isOk() && result.getSubchannel() != null) {
-              if (requestCount.get() >= maxConcurrentRequests) {
-                if (loadStatsStore != null) {
-                  loadStatsStore.recordDroppedRequest();
+            if (enableCircuitBreaking) {
+              if (result.getStatus().isOk() && result.getSubchannel() != null) {
+                if (requestCount.get() >= maxConcurrentRequests) {
+                  if (loadStatsStore != null) {
+                    loadStatsStore.recordDroppedRequest();
+                  }
+                  return PickResult.withDrop(Status.UNAVAILABLE.withDescription(
+                      "Cluster max concurrent requests limit exceeded"));
+                } else {
+                  ClientStreamTracer.Factory tracerFactory = new RequestCountingStreamTracerFactory(
+                      result.getStreamTracerFactory(), requestCount);
+                  return PickResult.withSubchannel(result.getSubchannel(), tracerFactory);
                 }
-                return PickResult.withDrop(Status.UNAVAILABLE.withDescription(
-                    "Cluster max concurrent requests limit exceeded"));
-              } else {
-                ClientStreamTracer.Factory tracerFactory = new RequestCountingStreamTracerFactory(
-                    result.getStreamTracerFactory(), requestCount);
-                return PickResult.withSubchannel(result.getSubchannel(), tracerFactory);
               }
             }
             return result;

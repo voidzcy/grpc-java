@@ -30,7 +30,7 @@ public class ManagedChannelRegistryTest {
   private ChannelCredentials creds = new ChannelCredentials() {};
 
   @Test
-  public void register_unavilableProviderThrows() {
+  public void register_unavailableProviderThrows() {
     ManagedChannelRegistry reg = new ManagedChannelRegistry();
     try {
       reg.register(new BaseProvider(false, 5));

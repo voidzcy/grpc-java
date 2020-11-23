@@ -60,6 +60,7 @@ import io.grpc.xds.LrsLoadBalancerProvider.LrsConfig;
 import io.grpc.xds.PriorityLoadBalancerProvider.PriorityLbConfig;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedPolicySelection;
 import io.grpc.xds.WeightedTargetLoadBalancerProvider.WeightedTargetConfig;
+import io.grpc.xds.XdsNameResolverProvider.CallCounterProvider;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -69,6 +70,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import org.junit.After;
@@ -135,6 +137,13 @@ public class EdsLoadBalancer2Test {
   public void setUp() {
     MockitoAnnotations.initMocks(this);
 
+    CallCounterProvider callCounterProvider = new CallCounterProvider() {
+      @Override
+      public AtomicLong getOrCreate(String cluster, @Nullable String edsServiceName) {
+        return new AtomicLong();
+      }
+    };
+
     registry.register(new FakeLoadBalancerProvider(PRIORITY_POLICY_NAME));
     registry.register(new FakeLoadBalancerProvider(LRS_POLICY_NAME));
     loadBalancer = new EdsLoadBalancer2(helper, registry, mockRandom);
@@ -142,7 +151,10 @@ public class EdsLoadBalancer2Test {
         ResolvedAddresses.newBuilder()
             .setAddresses(Collections.<EquivalentAddressGroup>emptyList())
             .setAttributes(
-                Attributes.newBuilder().set(XdsAttributes.XDS_CLIENT_POOL, xdsClientPool).build())
+                Attributes.newBuilder()
+                    .set(XdsAttributes.XDS_CLIENT_POOL, xdsClientPool)
+                    .set(XdsAttributes.CALL_COUNTER_PROVIDER, callCounterProvider)
+                    .build())
             .setLoadBalancingPolicyConfig(
                 new EdsConfig(
                     CLUSTER, EDS_SERVICE_NAME, LRS_SERVER_NAME, null, weightedTarget, roundRobin))
@@ -483,7 +495,19 @@ public class EdsLoadBalancer2Test {
   }
 
   @Test
-  public void maxConcurrentRequests_appliedByLbConfig() {
+  public void maxConcurrentRequests_appliedByLbConfig_enableCircuitBreaking() {
+    boolean originalEnableCircuitBreaking = EdsLoadBalancer2.enableCircuitBreaking;
+    EdsLoadBalancer2.enableCircuitBreaking = true;
+    subtest_maxConcurrentRequests_appliedByLbConfig(true);
+    EdsLoadBalancer2.enableCircuitBreaking = originalEnableCircuitBreaking;
+  }
+
+  @Test
+  public void maxConcurrentRequests_appliedByLbConfig_circuitBreakingDisabledByDefault() {
+    subtest_maxConcurrentRequests_appliedByLbConfig(false);
+  }
+
+  private void subtest_maxConcurrentRequests_appliedByLbConfig(boolean enableCircuitBreaking) {
     long maxConcurrentRequests = 100L;
     FakeLoadBalancerProvider fakeRoundRobinProvider = new FakeLoadBalancerProvider("round_robin");
     PolicySelection fakeRoundRobinSelection = new PolicySelection(fakeRoundRobinProvider, null);
@@ -523,11 +547,17 @@ public class EdsLoadBalancer2Test {
     assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(0L);
 
     PickResult result = currentPicker.pickSubchannel(mock(PickSubchannelArgs.class));
-    assertThat(result.getStatus().isOk()).isFalse();
-    assertThat(result.getStatus().getCode()).isEqualTo(Code.UNAVAILABLE);
-    assertThat(result.getStatus().getDescription())
-        .isEqualTo("Cluster max concurrent requests limit exceeded");
-    assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    if (enableCircuitBreaking) {
+      assertThat(result.getStatus().isOk()).isFalse();
+      assertThat(result.getStatus().getCode()).isEqualTo(Code.UNAVAILABLE);
+      assertThat(result.getStatus().getDescription())
+          .isEqualTo("Cluster max concurrent requests limit exceeded");
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    } else {
+      assertThat(result.getStatus().isOk()).isTrue();
+      assertThat(result.getSubchannel()).isSameInstanceAs(subchannel);
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(0L);
+    }
 
     // Dynamically increment circuit breakers max_concurrent_requests threshold.
     maxConcurrentRequests = 101L;
@@ -544,11 +574,28 @@ public class EdsLoadBalancer2Test {
     result = currentPicker.pickSubchannel(mock(PickSubchannelArgs.class));
     assertThat(result.getStatus().isOk()).isTrue();
     assertThat(result.getSubchannel()).isSameInstanceAs(subchannel);
-    assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    if (enableCircuitBreaking) {
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    } else {
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(0L);
+    }
   }
 
   @Test
-  public void maxConcurrentRequests_appliedWithDefaultValue() {
+  public void maxConcurrentRequests_appliedWithDefaultValue_enableCircuitBreaking() {
+    boolean originalEnableCircuitBreaking = EdsLoadBalancer2.enableCircuitBreaking;
+    EdsLoadBalancer2.enableCircuitBreaking = true;
+    subtest_maxConcurrentRequests_appliedWithDefaultValue(true);
+    EdsLoadBalancer2.enableCircuitBreaking = originalEnableCircuitBreaking;
+  }
+
+  @Test
+  public void maxConcurrentRequests_appliedWithDefaultValue_circuitBreakingDisabledByDefault() {
+    subtest_maxConcurrentRequests_appliedWithDefaultValue(false);
+  }
+
+  private void subtest_maxConcurrentRequests_appliedWithDefaultValue(
+      boolean enableCircuitBreaking) {
     FakeLoadBalancerProvider fakeRoundRobinProvider = new FakeLoadBalancerProvider("round_robin");
     PolicySelection fakeRoundRobinSelection = new PolicySelection(fakeRoundRobinProvider, null);
     PolicySelection weightedTargetSelection = prepareRealDownstreamLbPolicies();
@@ -587,11 +634,17 @@ public class EdsLoadBalancer2Test {
     assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(0L);
 
     PickResult result = currentPicker.pickSubchannel(mock(PickSubchannelArgs.class));
-    assertThat(result.getStatus().isOk()).isFalse();
-    assertThat(result.getStatus().getCode()).isEqualTo(Code.UNAVAILABLE);
-    assertThat(result.getStatus().getDescription())
-        .isEqualTo("Cluster max concurrent requests limit exceeded");
-    assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    if (enableCircuitBreaking) {
+      assertThat(result.getStatus().isOk()).isFalse();
+      assertThat(result.getStatus().getCode()).isEqualTo(Code.UNAVAILABLE);
+      assertThat(result.getStatus().getDescription())
+          .isEqualTo("Cluster max concurrent requests limit exceeded");
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(1L);
+    } else {
+      assertThat(result.getStatus().isOk()).isTrue();
+      assertThat(result.getSubchannel()).isSameInstanceAs(subchannel);
+      assertThat(xdsClient.clusterStats.get(EDS_SERVICE_NAME).totalDrops).isEqualTo(0L);
+    }
   }
 
   @Test

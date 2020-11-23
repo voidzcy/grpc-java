@@ -33,11 +33,11 @@ import io.grpc.ClientInterceptor;
 import io.grpc.ForwardingClientCall.SimpleForwardingClientCall;
 import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener;
 import io.grpc.Grpc;
+import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Server;
-import io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.testing.integration.Messages.ClientConfigureRequest;
@@ -49,6 +49,7 @@ import io.grpc.testing.integration.Messages.LoadBalancerStatsRequest;
 import io.grpc.testing.integration.Messages.LoadBalancerStatsResponse;
 import io.grpc.testing.integration.Messages.SimpleRequest;
 import io.grpc.testing.integration.Messages.SimpleResponse;
+import io.grpc.xds.XdsChannelCredentials;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -81,6 +82,7 @@ public final class XdsTestClient {
   private int qps = 1;
   private volatile RpcConfig rpcConfig;
   private int rpcTimeoutSec = 20;
+  private boolean secureMode = false;
   private String server = "localhost:8080";
   private int statsPort = 8081;
   private Server statsServer;
@@ -147,6 +149,8 @@ public final class XdsTestClient {
         server = value;
       } else if ("stats_port".equals(key)) {
         statsPort = Integer.valueOf(value);
+      } else if ("secureMode".equals(key)) {
+        secureMode = Boolean.valueOf(value);
       } else {
         System.err.println("Unknown argument: " + key);
         usage = true;
@@ -176,6 +180,8 @@ public final class XdsTestClient {
               + c.rpcTimeoutSec
               + "\n  --server=host:port     Address of server. Default: "
               + c.server
+              + "\n  --secureMode=BOOLEAN   Use true to enable XdsCredentials. Default: "
+              + c.secureMode
               + "\n  --stats_port=INT       Port to expose peer distribution stats service. "
               + "Default: "
               + c.statsPort);
@@ -231,7 +237,13 @@ public final class XdsTestClient {
     try {
       statsServer.start();
       for (int i = 0; i < numChannels; i++) {
-        channels.add(NettyChannelBuilder.forTarget(server).usePlaintext().build());
+        channels.add(
+            Grpc.newChannelBuilder(
+                    server,
+                    secureMode
+                        ? XdsChannelCredentials.create(InsecureChannelCredentials.create())
+                        : InsecureChannelCredentials.create())
+                .build());
       }
       exec = MoreExecutors.listeningDecorator(Executors.newSingleThreadScheduledExecutor());
       runQps();
@@ -326,7 +338,7 @@ public final class XdsTestClient {
 
                 @Override
                 public void onError(Throwable t) {
-                  handleRpcError(requestId, rpcType, hostnameRef.get(), savedWatchers);
+                  handleRpcError(requestId, rpcType, savedWatchers);
                 }
 
                 @Override
@@ -347,7 +359,7 @@ public final class XdsTestClient {
                   if (printResponse) {
                     logger.log(Level.WARNING, "Rpc failed: {0}", t);
                   }
-                  handleRpcError(requestId, rpcType, hostnameRef.get(), savedWatchers);
+                  handleRpcError(requestId, rpcType, savedWatchers);
                 }
 
                 @Override
@@ -395,8 +407,7 @@ public final class XdsTestClient {
         notifyWatchers(watchers, rpcType, requestId, hostname);
       }
 
-      private void handleRpcError(long requestId, RpcType rpcType, String hostname,
-          Set<XdsStatsWatcher> watchers) {
+      private void handleRpcError(long requestId, RpcType rpcType, Set<XdsStatsWatcher> watchers) {
         synchronized (lock) {
           Integer failedBase = rpcsFailedByMethod.get(rpcType.name());
           if (failedBase == null) {
@@ -404,7 +415,7 @@ public final class XdsTestClient {
           }
           rpcsFailedByMethod.put(rpcType.name(), failedBase + 1);
         }
-        notifyWatchers(watchers, rpcType, requestId, hostname);
+        notifyWatchers(watchers, rpcType, requestId, null);
       }
     }
 
@@ -508,7 +519,7 @@ public final class XdsTestClient {
     private final EnumMap<RpcType, Map<String, Integer>> rpcsByTypeAndPeer =
         new EnumMap<>(RpcType.class);
     private final Object lock = new Object();
-    private int noRemotePeer;
+    private int rpcsFailed;
 
     private XdsStatsWatcher(long startId, long endId) {
       latch = new CountDownLatch(Ints.checkedCast(endId - startId));
@@ -539,7 +550,7 @@ public final class XdsTestClient {
               rpcsByTypeAndPeer.put(rpcType, rpcMap);
             }
           } else {
-            noRemotePeer += 1;
+            rpcsFailed += 1;
           }
           latch.countDown();
         }
@@ -565,7 +576,7 @@ public final class XdsTestClient {
           rpcs.putAllRpcsByPeer(entry.getValue());
           builder.putRpcsByMethod(getRpcTypeString(entry.getKey()), rpcs.build());
         }
-        builder.setNumFailures(noRemotePeer + (int) latch.getCount());
+        builder.setNumFailures(rpcsFailed);
       }
       return builder.build();
     }
