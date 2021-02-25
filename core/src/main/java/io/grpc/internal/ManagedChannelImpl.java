@@ -636,6 +636,7 @@ final class ManagedChannelImpl extends ManagedChannel implements
             .setProxyDetector(proxyDetector)
             .setSynchronizationContext(syncContext)
             .setScheduledExecutorService(scheduledExecutor)
+            .setChannelId(logId.getId())
             .setServiceConfigParser(serviceConfigParser)
             .setChannelLogger(channelLogger)
             .setOffloadExecutor(

@@ -21,6 +21,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
+import com.google.common.base.Optional;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -414,6 +415,7 @@ public abstract class NameResolver {
     private final ProxyDetector proxyDetector;
     private final SynchronizationContext syncContext;
     private final ServiceConfigParser serviceConfigParser;
+    private final long channelId;
     @Nullable private final ScheduledExecutorService scheduledExecutorService;
     @Nullable private final ChannelLogger channelLogger;
     @Nullable private final Executor executor;
@@ -423,6 +425,7 @@ public abstract class NameResolver {
         ProxyDetector proxyDetector,
         SynchronizationContext syncContext,
         ServiceConfigParser serviceConfigParser,
+        long channelId,
         @Nullable ScheduledExecutorService scheduledExecutorService,
         @Nullable ChannelLogger channelLogger,
         @Nullable Executor executor) {
@@ -430,6 +433,7 @@ public abstract class NameResolver {
       this.proxyDetector = checkNotNull(proxyDetector, "proxyDetector not set");
       this.syncContext = checkNotNull(syncContext, "syncContext not set");
       this.serviceConfigParser = checkNotNull(serviceConfigParser, "serviceConfigParser not set");
+      this.channelId = channelId;
       this.scheduledExecutorService = scheduledExecutorService;
       this.channelLogger = channelLogger;
       this.executor = executor;
@@ -494,6 +498,15 @@ public abstract class NameResolver {
     }
 
     /**
+     * Returns the unique ID number for the Channel served by this NameResolver.
+     * @since 1.37.0
+     */
+    // TODO(chenngyuanzhang): annotate with @ExperimentalApi
+    public Optional<Long> getChannelId() {
+      return channelId > 0 ? Optional.of(channelId) : Optional.<Long>absent();
+    }
+
+    /**
      * Returns the {@link ChannelLogger} for the Channel served by this NameResolver.
      *
      * @since 1.26.0
@@ -525,6 +538,7 @@ public abstract class NameResolver {
           .add("proxyDetector", proxyDetector)
           .add("syncContext", syncContext)
           .add("serviceConfigParser", serviceConfigParser)
+          .add("channelId", channelId)
           .add("scheduledExecutorService", scheduledExecutorService)
           .add("channelLogger", channelLogger)
           .add("executor", executor)
@@ -567,6 +581,7 @@ public abstract class NameResolver {
       private ProxyDetector proxyDetector;
       private SynchronizationContext syncContext;
       private ServiceConfigParser serviceConfigParser;
+      private long channelId;
       private ScheduledExecutorService scheduledExecutorService;
       private ChannelLogger channelLogger;
       private Executor executor;
@@ -625,6 +640,18 @@ public abstract class NameResolver {
       }
 
       /**
+       * See {@link Args#getChannelId}. This is an optional field.
+       *
+       * @since 1.37.0
+       */
+      // TODO(chenngyuanzhang): annotate with @ExperimentalApi
+      public Builder setChannelId(long id) {
+        checkArgument(id > 0, "invalid channel ID");
+        this.channelId = id;
+        return this;
+      }
+
+      /**
        * See {@link Args#getChannelLogger}.
        *
        * @since 1.26.0
@@ -655,7 +682,7 @@ public abstract class NameResolver {
         return
             new Args(
                 defaultPort, proxyDetector, syncContext, serviceConfigParser,
-                scheduledExecutorService, channelLogger, executor);
+                channelId, scheduledExecutorService, channelLogger, executor);
       }
     }
   }
