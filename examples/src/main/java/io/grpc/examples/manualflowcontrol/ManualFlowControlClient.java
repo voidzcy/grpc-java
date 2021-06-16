@@ -16,13 +16,15 @@
 
 package io.grpc.examples.manualflowcontrol;
 
+import io.grpc.Codec;
+import io.grpc.CompressorRegistry;
+import io.grpc.DecompressorRegistry;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
+import io.grpc.netty.NettyChannelBuilder;
 import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
 
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -31,15 +33,26 @@ import java.util.logging.Logger;
 public class ManualFlowControlClient {
     private static final Logger logger =
         Logger.getLogger(ManualFlowControlClient.class.getName());
+    private static final int WINDOW_SIZE = 1_000_000;
 
   public static void main(String[] args) throws InterruptedException {
     final CountDownLatch done = new CountDownLatch(1);
 
     // Create a channel and a stub
-    ManagedChannel channel = ManagedChannelBuilder
-        .forAddress("localhost", 50051)
-        .usePlaintext()
-        .build();
+    CompressorRegistry compressorRegistry = CompressorRegistry.newEmptyInstance();
+    compressorRegistry.register(Codec.Identity.NONE);
+    DecompressorRegistry decompressorRegistry =
+        DecompressorRegistry.emptyInstance().with(Codec.Identity.NONE, true);
+
+    ManagedChannel channel =
+        NettyChannelBuilder.forAddress("localhost", 50051)
+            .keepAliveTime(5, TimeUnit.SECONDS)
+            .keepAliveTimeout(30, TimeUnit.SECONDS)
+            .compressorRegistry(compressorRegistry)
+            .decompressorRegistry(decompressorRegistry)
+            .usePlaintext()
+            //.flowControlWindow(1_000_000)
+            .build();
     StreamingGreeterGrpc.StreamingGreeterStub stub = StreamingGreeterGrpc.newStub(channel);
 
     // When using manual flow-control and back-pressure on the client, the ClientResponseObserver handles both
@@ -48,13 +61,16 @@ public class ManualFlowControlClient {
         new ClientResponseObserver<HelloRequest, HelloReply>() {
 
           ClientCallStreamObserver<HelloRequest> requestStream;
+          int windowSize = WINDOW_SIZE;
 
           @Override
           public void beforeStart(final ClientCallStreamObserver<HelloRequest> requestStream) {
             this.requestStream = requestStream;
             // Set up manual flow control for the response stream. It feels backwards to configure the response
             // stream's flow control using the request stream's observer, but this is the way it is.
-            requestStream.disableAutoRequestWithInitial(1);
+            requestStream.disableAutoRequestWithInitial(WINDOW_SIZE);
+            String name = String.valueOf(System.nanoTime());
+            final HelloRequest request = HelloRequest.newBuilder().setName(name).build();
 
             // Set up a back-pressure-aware producer for the request stream. The onReadyHandler will be invoked
             // when the consuming side has enough buffer space to receive more messages.
@@ -68,23 +84,11 @@ public class ManualFlowControlClient {
             // additional messages from being processed by the incoming StreamObserver. The onReadyHandler must return
             // in a timely manner or else message processing throughput will suffer.
             requestStream.setOnReadyHandler(new Runnable() {
-              // An iterator is used so we can pause and resume iteration of the request data.
-              Iterator<String> iterator = names().iterator();
-
               @Override
               public void run() {
                 // Start generating values from where we left off on a non-gRPC thread.
                 while (requestStream.isReady()) {
-                  if (iterator.hasNext()) {
-                      // Send more messages if there are more messages to send.
-                      String name = iterator.next();
-                      logger.info("--> " + name);
-                      HelloRequest request = HelloRequest.newBuilder().setName(name).build();
-                      requestStream.onNext(request);
-                  } else {
-                      // Signal completion if there is nothing left to send.
-                      requestStream.onCompleted();
-                  }
+                  requestStream.onNext(request);
                 }
               }
             });
@@ -93,8 +97,10 @@ public class ManualFlowControlClient {
           @Override
           public void onNext(HelloReply value) {
             logger.info("<-- " + value.getMessage());
-            // Signal the sender to send one message.
-            requestStream.request(1);
+            if (--windowSize == WINDOW_SIZE / 2) {
+              windowSize += WINDOW_SIZE;
+              requestStream.request(WINDOW_SIZE);
+            }
           }
 
           @Override
@@ -116,7 +122,7 @@ public class ManualFlowControlClient {
     done.await();
 
     channel.shutdown();
-    channel.awaitTermination(1, TimeUnit.SECONDS);
+    channel.awaitTermination(365, TimeUnit.DAYS);
   }
 
   private static List<String> names() {
